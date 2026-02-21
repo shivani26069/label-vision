@@ -1,7 +1,7 @@
 import { View, Text, StatusBar, Pressable } from "react-native";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import { useColorScheme } from "react-native";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { CheckCircle, AlertCircle } from "lucide-react-native";
 import { useFonts } from "expo-font";
 import { CameraView, useCameraPermissions } from "expo-camera";
@@ -117,6 +117,20 @@ export default function ScanningScreen() {
       }
     };
   }, [settings.voiceEnabled, permission?.status, requestPermission]);
+
+  // Reset state when screen comes into focus (after returning from result screen)
+  useFocusEffect(
+    useCallback(() => {
+      console.log("🔄 Screen focused - resetting capture state");
+      setCapturing(false);
+      setCameraReady(false);
+      return () => {
+        if (captureTimeoutRef.current) {
+          clearTimeout(captureTimeoutRef.current);
+        }
+      };
+    }, [])
+  );
 
   if (!fontsLoaded) {
     return null;

@@ -15,7 +15,7 @@ import numpy as np
 
 from database import get_db, engine, Base
 from models import ScanHistory
-from services.ocr import SimpleOCRClient
+from services.ocr import get_ocr_client
 from services.extract import extract_from_pipeline
 
 load_dotenv()
@@ -44,8 +44,13 @@ app.add_middleware(
 # Create tables
 Base.metadata.create_all(bind=engine)
 
-# OCR client (singleton)
-ocr_client = SimpleOCRClient()
+# OCR client (singleton) - use OCR_ENGINE env var ('tesseract' or 'easyocr')
+try:
+    ocr_client = get_ocr_client()
+    print(f"✅ OCR Engine initialized: {os.getenv('OCR_ENGINE', 'tesseract')}")
+except Exception as e:
+    print(f"❌ Failed to initialize OCR engine: {e}")
+    raise
 
 # Helper: generate short UUID
 def short_id() -> str:
