@@ -44,403 +44,201 @@ WARNING_KEYWORDS = [
 ]
 
 # ===== GEMINI EXTRACTION (PRIMARY METHOD) =====
-def extract_with_gemini(ocr_text: str) -> Dict[str, Any]:
-    """
-    Use Google Gemini AI to intelligently extract product details from OCR text.
-    Super smart - understands product label structure without regex.
-    
-    Returns:
-    {
-        "product_name": str or None,
-        "brand": str or None,
-        "expiry_date": str or None,
-        "mfg_date": str or None,
-        "ingredients": [str],
-        "warnings": [str],
-    }
-    """
-    if not ocr_text or len(ocr_text.strip()) < 5:
-        return {
-            "product_name": None,
-            "brand": None,
-            "expiry_date": None,
-            "mfg_date": None,
-            "ingredients": [],
-            "warnings": [],
-        }
-    
-    # Check if Gemini is initialized
-    if not model:
-        print(f"❌ Gemini model not initialized. Skipping AI extraction.")
-        return {
-            "product_name": None,
-            "brand": None,
-            "expiry_date": None,
-            "mfg_date": None,
-            "ingredients": [],
-            "warnings": [],
-        }
-    
-    prompt = f"""You are a product label analyzer. Extract the following information from this OCR-extracted product label text.
+GEMINI_PROMPT_TEMPLATE = """You are a product label data extractor. Extract fields from this OCR text.
 
-OCR TEXT:
+CRITICAL RULES:
+- product_name: ALWAYS return something. If unsure, use the most prominent noun phrase. NEVER null.
+- brand: Return brand/company name if found. null only if truly absent.
+- expiry_date: Look for: exp, expiry, best before, use by, BB, EXP. Return the date string as-is.
+- mfg_date: Look for: mfg, manufactured, prod, MFD. null if absent.
+- ingredients: Split by commas or line breaks. Return array. [] if none found.
+- warnings: Lines with: warning, caution, avoid, not suitable, allergen. Return array. [] if none.
+
+EXAMPLES:
+INPUT: TONYMOLY\\nCeramide Mochi Toner\\nEXP: 12/2026\\nIngredients: Water, Glycerin\\nWarning: Avoid eyes
+OUTPUT: {{"product_name":"Ceramide Mochi Toner","brand":"TONYMOLY","expiry_date":"12/2026","mfg_date":null,"ingredients":["Water","Glycerin"],"warnings":["Avoid eyes"]}}
+
+INPUT: Dove Beauty Bar\\nBest Before 06/2027\\nSodium Palmate, Water, Fragrance
+OUTPUT: {{"product_name":"Dove Beauty Bar","brand":"Dove","expiry_date":"06/2027","mfg_date":null,"ingredients":["Sodium Palmate","Water","Fragrance"],"warnings":[]}}
+
+NOW EXTRACT:
 {ocr_text}
 
-Extract EXACTLY these fields (return as JSON):
-1. product_name: The product name (e.g., "Ceramide Mochi Toner", "Vitamin C Serum")
-2. brand: The brand/manufacturer name (e.g., "TONYMOLY", "DOVE", "Neutrogena")
-3. expiry_date: The expiration/best-before date (format: MM/DD/YYYY or text, or null if not found)
-4. mfg_date: The manufacturing date (format: MM/DD/YYYY or text, or null if not found)
-5. ingredients: List of ingredients (split by commas or newlines, remove bullet points/dashes)
-6. warnings: List of warnings or cautions (e.g., "Avoid eyes", "External use only")
+Return ONLY valid JSON, no markdown, no explanation:"""
 
-RULES:
-- Return ONLY valid information found in the text
-- If something is not clearly present, return null (not "unknown" or empty string)
-- Product name should be descriptive, not just the brand
-- For ingredients, return an array of individual items, not the whole list as one string
-- For warnings, return complete sentences or phrases
 
-Return ONLY a valid JSON object, no other text:
-{{
-  "product_name": "...",
-  "brand": "...",
-  "expiry_date": "...",
-  "mfg_date": "...",
-  "ingredients": ["item1", "item2"],
-  "warnings": ["warning1", "warning2"]
-}}"""
-    
+def extract_with_gemini(ocr_text: str) -> Dict[str, Any]:
+    empty = {
+        "product_name": None, "brand": None,
+        "expiry_date": None, "mfg_date": None,
+        "ingredients": [], "warnings": [],
+    }
+
+    if not ocr_text or len(ocr_text.strip()) < 5:
+        return empty
+    if not model:
+        print("⚠️ Gemini not available — using regex fallback")
+        return empty
+
+    prompt = GEMINI_PROMPT_TEMPLATE.format(ocr_text=ocr_text[:3000])
+
     try:
-        print(f"🤖 Sending OCR text to Gemini...")
-        response = model.generate_content(prompt)
-        response_text = response.text.strip()
-        print(f"✅ Gemini response received")
-        
-        # Parse JSON from response
-        # Sometimes Gemini wraps it in markdown code blocks, so extract JSON
-        if "```json" in response_text:
-            response_text = response_text.split("```json")[1].split("```")[0]
-        elif "```" in response_text:
-            response_text = response_text.split("```")[1].split("```")[0]
-        
-        result = json.loads(response_text)
-        
-        # Clean up arrays
-        # Ensure arrays
+        print("🤖 Sending to Gemini...")
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.GenerationConfig(
+                temperature=0.1,        # LOW temp = consistent, not creative
+                max_output_tokens=1024,
+            ),
+        )
+        raw = response.text.strip()
+        print(f"✅ Gemini raw (first 200): {raw[:200]}")
+
+        # Strip markdown fences if Gemini wraps in ```json ... ```
+        if "```json" in raw:
+            raw = raw.split("```json")[1].split("```")[0].strip()
+        elif "```" in raw:
+            raw = raw.split("```")[1].split("```")[0].strip()
+
+        # Find first { ... } block in case there's any preamble
+        match = re.search(r'\{.*\}', raw, re.DOTALL)
+        if match:
+            raw = match.group(0)
+
+        result = json.loads(raw)
         result["ingredients"] = result.get("ingredients") or []
         result["warnings"] = result.get("warnings") or []
-        
-        print(f"✅ Extracted: product_name={result.get('product_name')}, brand={result.get('brand')}")
+
+        # If product_name still null, use heuristic
+        if not result.get("product_name"):
+            result["product_name"] = _heuristic_product_name(ocr_text)
+
+        print(f"✅ product_name={result.get('product_name')}, brand={result.get('brand')}")
         return result
-        
+
+    except json.JSONDecodeError as e:
+        print(f"❌ JSON parse error: {e} — falling back to regex")
+        return _regex_fallback(ocr_text)
     except Exception as e:
-        # Fallback: return empty/None if Gemini fails
-        print(f"❌ Gemini extraction failed: {e}")
-        return {
-            "product_name": None,
-            "brand": None,
-            "expiry_date": None,
-            "mfg_date": None,
-            "ingredients": [],
-            "warnings": [],
-        }
-
-        return {
-            "product_name": None,
-            "brand": None,
-            "expiry_date": None,
-            "mfg_date": None,
-            "ingredients": [],
-            "warnings": [],
-        }
-
-# STEP 6: PRODUCT & BRAND EXTRACTION (IDENTITY FIRST)
-def extract_brand(text: str) -> Optional[str]:
-    """
-    Extract brand from text.
-    Only return if CONFIDENT. Return None if unsure.
-    
-    Priority:
-    1. Exact match against KNOWN_BRANDS (high confidence)
-    2. Isolated all-caps words that look like brands (medium confidence)
-    """
-    if not text:
-        return None
-    
-    text_upper = text.upper()
-    
-    # Priority 1: Exact match against known brands (HIGH CONFIDENCE)
-    for brand in KNOWN_BRANDS:
-        if brand in text_upper:
-            return brand
-    
-    # Priority 2: Look for all-caps lines that look like brands
-    # But be CONSERVATIVE - only return if clearly a brand
-    lines = [line.strip() for line in text.split('\n') if line.strip()]
-    all_caps_candidates = []
-    
-    for line in lines:
-        # Must be all caps and reasonably short (brand convention)
-        if line.isupper() and 2 <= len(line) <= 20:
-            # Skip if it's clearly NOT a brand (descriptions, warnings)
-            skip_keywords = ["warning", "contains", "nourishing", "bouncy", "moist", "for"]
-            if any(kw in line.lower() for kw in skip_keywords):
-                continue
-            # Skip if it's a single letters (like "EE")
-            if len(line) <= 2:
-                continue
-            all_caps_candidates.append(line)
-    
-    # Return first reasonable candidate, but be conservative
-    # Only return if it looks legit (not random text)
-    if all_caps_candidates:
-        candidate = all_caps_candidates[0]
-        # Only return if it's a real-looking brand name (has letters)
-        if len(candidate) >= 3:
-            return candidate
-    
-    # Return None if not confident (better to have no brand than wrong brand)
-    return None
+        print(f"❌ Gemini call failed: {e} — falling back to regex")
+        return _regex_fallback(ocr_text)
 
 
-def extract_product_name(text: str) -> Optional[str]:
-    """
-    Extract product name from text.
-    Heuristics:
-    - Look for longer lines (product names)
-    - Prefer lines with mixed case (brand is all caps)
-    - Usually appear near the top
-    """
-    if not text:
-        return None
-    
-    lines = [line.strip() for line in text.split('\n') if line.strip()]
-    
-    # Look for lines that look like product names
-    for line in lines[:15]:
-        # Skip very short lines
+def _heuristic_product_name(text: str) -> str:
+    """Pick the first meaningful line that looks like a product name."""
+    lines = [l.strip() for l in text.split('\n') if l.strip()]
+    for line in lines[:20]:
         if len(line) < 3:
             continue
-        # Skip pure numbers
-        if re.match(r'^[0-9\W]+$', line):
+        if re.match(r'^[0-9\W]+$', line):   # skip pure numbers/symbols
             continue
-        # Skip descriptions (these tend to be long and all caps)
-        if len(line) > 40 and line.isupper():
+        if re.match(r'^[0-9]{1,2}[/\-]', line):  # skip date lines
             continue
-        # Skip single all-caps words (likely brand, not product)
-        if line.isupper() and len(line.split()) == 1:
+        if line.isupper() and len(line.split()) == 1:  # skip single brand word
             continue
-        # This looks like a product name!
         return line
-    
-    return None
+    return "Unknown Product"
 
-# STEP 7: DATE EXTRACTION (SAFETY-CRITICAL)
-def extract_dates(back_text: str) -> Dict[str, Optional[str]]:
-    """
-    Extract expiry and manufacturing dates from back label.
-    Safety-critical: never hallucinate dates.
-    Only from back_text where dates actually appear.
-    """
-    if not back_text:
-        return {"expiry_date": None, "mfg_date": None}
-    
-    patterns = {
-        "expiry_date": re.compile(
-            r'(?:exp|expiry|expires?|best\s*before|use\s*by)[:\s]*'
-            r'([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4}|[A-Za-z]+\s+[0-9]{4})',
-            re.IGNORECASE
-        ),
-        "mfg_date": re.compile(
-            r'(?:mfg|manufactured|prod|production|date\s*of)[:\s]*'
-            r'([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4}|[A-Za-z]+\s+[0-9]{4})',
-            re.IGNORECASE
-        ),
+
+def _regex_fallback(text: str) -> Dict[str, Any]:
+    """Pure regex extraction — runs when Gemini fails or is unavailable."""
+    result = {
+        "product_name": None, "brand": None,
+        "expiry_date": None, "mfg_date": None,
+        "ingredients": [], "warnings": [],
     }
-    
-    result = {"expiry_date": None, "mfg_date": None}
-    
-    for key, pattern in patterns.items():
-        match = pattern.search(back_text)
-        if match:
-            raw_date = match.group(1)
-            try:
-                # Normalize numeric dates
-                if re.match(r'^[0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4}$', raw_date):
-                    parts = re.split(r'[/-]', raw_date)
-                    if len(parts) == 3:
-                        if len(parts[2]) == 2:
-                            parts[2] = "20" + parts[2]
-                        result[key] = f"{parts[0]}/{parts[1]}/{parts[2]}"
-                else:
-                    # Keep text dates as-is
-                    result[key] = raw_date
-            except:
-                # On parsing error, return what we found
-                result[key] = raw_date
-    
-    # Explicitly return None if not found (never hallucinate)
-    return result
 
-# STEP 8: INGREDIENT & WARNING EXTRACTION
-def extract_ingredients(back_text: str) -> List[str]:
-    """
-    Extract ingredient list from back label.
-    Look for "Ingredients:" section and split by common delimiters.
-    Best-effort, not guaranteed.
-    """
-    if not back_text:
-        return []
-    
-    # Find "Ingredients:" header
-    match = re.search(
-        r'ingredients?[:\s]*\n?(.+?)(?:\n\s*\n|\n[A-Z][a-z]+:|$)',
-        back_text,
-        re.IGNORECASE | re.DOTALL
+    # Brand — check known list first
+    text_upper = text.upper()
+    for brand in KNOWN_BRANDS:
+        if brand.upper() in text_upper:
+            result["brand"] = brand
+            break
+
+    # Expiry date
+    exp = re.search(
+        r'(?:exp(?:iry)?|best\s*before|use\s*by|bb)[:\s]*'
+        r'([0-9]{1,2}[/\-][0-9]{1,2}(?:[/\-][0-9]{2,4})?|[A-Za-z]+\s+[0-9]{4})',
+        text, re.IGNORECASE
     )
-    
-    if not match:
-        return []
-    
-    block = match.group(1)
-    # Split by commas, semicolons, or newlines
-    parts = re.split(r'[,;\n]+', block)
-    
-    ingredients = [
-        p.strip().strip('•').strip('-').strip('*')
-        for p in parts
-        if p.strip() and len(p.strip()) > 2
-    ]
-    
-    return ingredients[:30]  # Limit to first 30 items
+    if exp:
+        result["expiry_date"] = exp.group(1)
 
+    # Mfg date
+    mfg = re.search(
+        r'(?:mfg|manufactured|prod(?:uction)?)[:\s]*'
+        r'([0-9]{1,2}[/\-][0-9]{1,2}(?:[/\-][0-9]{2,4})?|[A-Za-z]+\s+[0-9]{4})',
+        text, re.IGNORECASE
+    )
+    if mfg:
+        result["mfg_date"] = mfg.group(1)
 
-def extract_warnings(back_text: str) -> List[str]:
-    """
-    Extract warning statements from back label.
-    Look for lines containing warning keywords.
-    """
-    if not back_text:
-        return []
-    
-    warnings = []
-    lines = back_text.split('\n')
-    
-    for line in lines:
+    # Ingredients block
+    ing = re.search(
+        r'ingredients?[:\s]*\n?(.+?)(?:\n\s*\n|\n[A-Z][a-z]+:|$)',
+        text, re.IGNORECASE | re.DOTALL
+    )
+    if ing:
+        parts = re.split(r'[,;\n]+', ing.group(1))
+        result["ingredients"] = [
+            p.strip().strip('•-*') for p in parts
+            if p.strip() and len(p.strip()) > 2
+        ][:30]
+
+    # Warnings
+    for line in text.split('\n'):
         if any(kw in line.lower() for kw in WARNING_KEYWORDS):
             cleaned = line.strip()
-            if cleaned and len(cleaned) > 3:
-                warnings.append(cleaned)
-    
-    return warnings
+            if cleaned and len(cleaned) > 5:
+                result["warnings"].append(cleaned)
 
-# STEP 9: CONFIDENCE SCORING (HONESTY LAYER)
-def compute_confidence(front_text: str, back_text: str, extracted: Dict[str, Any]) -> float:
-    """
-    Score how confident we are in the results.
-    Lenient scoring: reward for what IS found, don't penalize for what isn't.
-    
-    - product_name found → +0.40
-    - brand found → +0.25 (optional, but good)
-    - expiry_date found → +0.20
-    - ingredients found → +0.10
-    - warnings found → +0.05
-    
-    If product_name (core requirement) found, we start at 0.40 minimum.
-    """
+    result["product_name"] = _heuristic_product_name(text)
+    return result
+
+
+def extract_from_pipeline(front_text, back_text, full_text=None):
+    combined = f"{front_text}\n{back_text}".strip()
+    if full_text:
+        combined = f"{full_text}\n{combined}".strip()
+
+    if not combined or len(combined) < 5:
+        return {
+            "product_name": None, "brand": None,
+            "expiry_date": None, "mfg_date": None,
+            "ingredients": [], "warnings": [], "confidence": 0.0,
+        }
+
+    # Tier 1: Gemini (falls back to regex internally if it fails)
+    extracted = extract_with_gemini(combined)
+
+    # Tier 2: If Gemini still gave nothing useful, supplement with regex
+    if not extracted.get("product_name") or extracted["product_name"] == "Unknown Product":
+        print("⚠️ Supplementing with regex...")
+        regex_result = _regex_fallback(combined)
+        for field, value in regex_result.items():
+            if not extracted.get(field) and value:
+                extracted[field] = value
+
+    # Better confidence scoring
     score = 0.0
-    
-    # Product name is the core (required)
-    if extracted.get("product_name"):
-        score += 0.40
+    if extracted.get("product_name") and extracted["product_name"] != "Unknown Product":
+        score += 0.35
     else:
-        return 0.0  # Without product name, confidence is 0
-    
-    # Brand is nice to have (optional)
-    if extracted.get("brand"):
-        score += 0.25
-    
-    # Expiry date is important for safety
-    if extracted.get("expiry_date"):
-        score += 0.20
-    
-    # Ingredients and warnings are helpful but not required
-    if extracted.get("ingredients"):
         score += 0.10
-    
-    if extracted.get("warnings"):
-        score += 0.05
-    
-    return min(score, 1.0)
+    if extracted.get("brand"):         score += 0.20
+    if extracted.get("expiry_date"):   score += 0.20
+    if extracted.get("mfg_date"):      score += 0.05
+    if extracted.get("ingredients"):   score += min(len(extracted["ingredients"]), 10) * 0.01
+    if extracted.get("warnings"):      score += 0.05
+    if len(combined.strip()) < 50:     score *= 0.5   # penalise bad scans
 
-
-# STEP 10: RESPONSE FORMATTING & EXTRACTION ORCHESTRATION
-def extract_from_pipeline(
-    front_text: str,
-    back_text: str,
-    full_text: Optional[str] = None
-) -> Dict[str, Any]:
-    """
-    STEP 10: Main extraction orchestrator using Gemini AI.
-    
-    Input: cleaned front_text, back_text
-    Output: structured schema matching requirements
-    """
-    
-    try:
-        # Combine front and back text for Gemini to analyze
-        combined_text = f"{front_text}\n{back_text}".strip()
-        
-        if not combined_text or len(combined_text) < 5:
-            return {
-                "product_name": None,
-                "brand": None,
-                "expiry_date": None,
-                "mfg_date": None,
-                "ingredients": [],
-                "warnings": [],
-                "confidence": 0.0
-            }
-        
-        # Use Gemini for intelligent extraction
-        print(f"🤖 Using Gemini to extract product details...")
-        gemini_result = extract_with_gemini(combined_text)
-        
-        # Compile results
-        extracted = {
-            "brand": gemini_result.get("brand"),
-            "product_name": gemini_result.get("product_name"),
-            "expiry_date": gemini_result.get("expiry_date"),
-            "mfg_date": gemini_result.get("mfg_date"),
-            "ingredients": gemini_result.get("ingredients", []),
-            "warnings": gemini_result.get("warnings", [])
-        }
-        
-        # Compute confidence based on what was extracted
-        confidence = compute_confidence(front_text, back_text, extracted)
-        
-        # Format for output
-        return {
-            "product_name": extracted.get("product_name"),
-            "brand": extracted.get("brand"),
-            "expiry_date": extracted.get("expiry_date"),
-            "mfg_date": extracted.get("mfg_date"),
-            "ingredients": extracted.get("ingredients", []),
-            "warnings": extracted.get("warnings", []),
-            "confidence": confidence
-        }
-        
-    except Exception as e:
-        print(f"❌ Extraction failed: {e}")
-        return {
-            "product_name": None,
-            "brand": None,
-            "expiry_date": None,
-            "mfg_date": None,
-            "ingredients": [],
-            "warnings": [],
-            "confidence": 0.0,
-            "failure_reason": str(e)
-        }
+    return {
+        "product_name": extracted.get("product_name"),
+        "brand":        extracted.get("brand"),
+        "expiry_date":  extracted.get("expiry_date"),
+        "mfg_date":     extracted.get("mfg_date"),
+        "ingredients":  extracted.get("ingredients", []),
+        "warnings":     extracted.get("warnings", []),
+        "confidence":   round(min(score, 1.0), 3),
+    }
 

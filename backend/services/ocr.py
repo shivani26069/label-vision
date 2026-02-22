@@ -113,17 +113,78 @@ class EasyOCRClient:
             raise RuntimeError(f"EasyOCR extraction failed: {e}")
 
 
+class PaddleOCRClient:
+    """
+    PaddleOCR — best for multi-language, curved/rotated text.
+    Install: pip install paddlepaddle paddleocr
+    GPU: pip install paddlepaddle-gpu  (replaces paddlepaddle)
+    """
+    def __init__(self, lang: str = "en", use_gpu: bool = False):
+        try:
+            from paddleocr import PaddleOCR
+        except ImportError:
+            raise ImportError(
+                "PaddleOCR not installed.\n"
+                "CPU: pip install paddlepaddle paddleocr\n"
+                "GPU: pip install paddlepaddle-gpu paddleocr"
+            )
+        # use_angle_cls=True handles rotated/upside-down text
+        self.reader = PaddleOCR(
+            use_angle_cls=True,
+            lang=lang,
+            use_gpu=use_gpu,
+            show_log=False,
+        )
+        print(f"✅ PaddleOCR ready | lang={lang} | gpu={use_gpu}")
+
+    def extract_text(self, image_bytes: bytes) -> str:
+        try:
+            import numpy as np
+            from PIL import Image
+            image = Image.open(io.BytesIO(image_bytes))
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            img_array = np.array(image)
+
+            result = self.reader.ocr(img_array, cls=True)
+
+            # PaddleOCR returns: [[[box, (text, confidence)], ...]]
+            lines = []
+            if result and result[0]:
+                for line in result[0]:
+                    text, confidence = line[1]
+                    if confidence > 0.5:   # filter low-confidence detections
+                        lines.append(text)
+
+            return "\n".join(lines).strip()
+        except Exception as e:
+            raise RuntimeError(f"PaddleOCR failed: {e}")
+
+    def extract_text_from_array(self, image_array: np.ndarray) -> str:
+        try:
+            buf = io.BytesIO()
+            Image.fromarray(image_array).save(buf, format="JPEG", quality=95)
+            return self.extract_text(buf.getvalue())
+        except Exception as e:
+            raise RuntimeError(f"PaddleOCR extract_text_from_array failed: {e}")
+
+
 def get_ocr_client(engine: str = None) -> Union[SimpleOCRClient, EasyOCRClient]:
     """
     Factory function to get OCR client based on env var or parameter.
-    OCR_ENGINE env var: 'tesseract' (default) or 'easyocr'
+    OCR_ENGINE env var: 'tesseract' (default), 'easyocr', or 'paddleocr'
     """
     engine = engine or os.getenv('OCR_ENGINE', 'tesseract').lower()
     
-    if engine == 'easyocr':
-        return EasyOCRClient()
-    elif engine == 'tesseract':
+    if engine == 'tesseract':
         return SimpleOCRClient()
+    elif engine == 'easyocr':
+        return EasyOCRClient()
+    elif engine == 'paddleocr':
+        return PaddleOCRClient(
+            lang=os.getenv('PADDLE_LANG', 'en'),
+            use_gpu=os.getenv('USE_GPU', 'false').lower() == 'true',
+        )
     else:
-        raise ValueError(f"Unknown OCR engine: {engine}. Use 'tesseract' or 'easyocr'")
+        raise ValueError(f"Unknown OCR engine: {engine}. Use 'tesseract', 'easyocr', or 'paddleocr'")
 
