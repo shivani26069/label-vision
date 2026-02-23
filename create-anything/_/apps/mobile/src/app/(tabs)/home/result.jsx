@@ -38,6 +38,13 @@ export default function ResultScreen() {
 
   useEffect(() => {
     if (currentScan) {
+      console.log("📍 ResultScreen mounted with currentScan:", JSON.stringify(currentScan, null, 2));
+      console.log("📊 Ingredients on result screen:", currentScan.ingredients);
+      console.log("📊 Ingredients count:", currentScan.ingredients?.length);
+      console.log("📊 Brand:", currentScan.brand);
+      console.log("📊 Product name:", currentScan.product_name);
+      console.log("📊 Is Failed?:", isFailed);
+      
       addScan(currentScan);
 
       if (settings.hapticsEnabled) {

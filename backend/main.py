@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 import httpx
 from PIL import Image
 import numpy as np
+import json
 
 from database import get_db, engine, Base
 from models import ScanHistory
@@ -136,6 +137,23 @@ async def scan_multiple(
     db: Session = Depends(get_db),
 ):
     logger.info(f"📥 Received {len(files)} files for multi-image scan")
+
+    # region agent log
+    try:
+        log_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "debug-8d7e8e.log")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "sessionId": "8d7e8e",
+                "runId": "pre-fix",
+                "hypothesisId": "H2",
+                "location": "backend/main.py:scan_multiple",
+                "message": "scan_multiple called",
+                "data": {"file_count": len(files)},
+                "timestamp": int(datetime.utcnow().timestamp() * 1000),
+            }) + "\n")
+    except Exception:
+        pass
+    # endregion
     
     if not files or len(files) == 0:
         raise HTTPException(status_code=400, detail="At least one file required")

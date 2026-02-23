@@ -1,4 +1,4 @@
-const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'http://192.168.1.6:8000';
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'http://192.168.1.2:8000';
 
 // Test connectivity
 export const testConnection = async () => {
@@ -53,10 +53,20 @@ export const scanImage = async (imageUri) => {
         if (timeoutId) clearTimeout(timeoutId);
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
+            console.log('📥 RAW RESPONSE TEXT (first 500 chars):', xhr.responseText.substring(0, 500));
             const result = JSON.parse(xhr.responseText);
-            console.log('✅ Scan result:', result);
+            console.log('✅ PARSED RESULT - Full object:', JSON.stringify(result, null, 2));
+            console.log('✅ Product Name:', result.product_name);
+            console.log('✅ Ingredients count:', result.ingredients?.length || 0);
+            console.log('✅ Ingredients:', result.ingredients);
+            console.log('✅ Brand:', result.brand);
+            console.log('✅ Expiry:', result.expiry_date);
+            console.log('✅ Warnings:', result.warnings);
+            console.log('✅ Confidence:', result.confidence);
             resolve(result);
           } catch (e) {
+            console.error('❌ JSON parse failed:', e);
+            console.error('❌ Response text was:', xhr.responseText);
             reject(new Error('Failed to parse response'));
           }
         } else {

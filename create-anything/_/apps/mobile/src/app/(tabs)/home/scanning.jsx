@@ -1,4 +1,4 @@
-import { View, Text, StatusBar, Pressable, Modal, ActivityIndicator } from "react-native";
+import { View, Text, StatusBar, Pressable, ActivityIndicator } from "react-native";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useColorScheme } from "react-native";
 import { useEffect, useRef, useState, useCallback } from "react";
@@ -136,11 +136,25 @@ export default function ScanningScreen() {
 
       setUploadProgress(100);
       console.log("✅ Backend response:", scanResult);
+      console.log("📊 RESPONSE STRUCTURE:");
+      console.log("  - product_name:", scanResult?.product_name);
+      console.log("  - brand:", scanResult?.brand);
+      console.log("  - expiry_date:", scanResult?.expiry_date);
+      console.log("  - mfg_date:", scanResult?.mfg_date);
+      console.log("  - ingredients (count):", scanResult?.ingredients?.length);
+      console.log("  - ingredients (full):", scanResult?.ingredients);
+      console.log("  - warnings:", scanResult?.warnings);
+      console.log("  - confidence:", scanResult?.confidence);
+      console.log("  - raw_text length:", scanResult?.raw_text?.length);
+      console.log("  - extracted_json:", scanResult?.extracted_json);
+      console.log("📋 FULL RESPONSE OBJECT:", JSON.stringify(scanResult, null, 2));
 
       setProcessingStage("complete");
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
+      console.log("🔄 Storing in currentScan...");
       setCurrentScan(scanResult);
+      console.log("✨ currentScan state updated");
       setPhotos([]); // Reset photos
       setPhotoMode("initial");
       setIsProcessing(false);
@@ -242,8 +256,8 @@ export default function ScanningScreen() {
     <View style={{ flex: 1, backgroundColor: isDark ? "#111827" : "#F9FAFB" }}>
       <StatusBar barStyle={isDark ? "light-content" : "dark-content"} />
 
-      {/* SHOW PROCESSING SCREEN INSTEAD OF CAMERA IF PROCESSING */}
       {isProcessing ? (
+        // PROCESSING MODAL - Show full screen loading screen
         <View
           style={{
             flex: 1,
@@ -431,212 +445,271 @@ export default function ScanningScreen() {
           </View>
         </View>
       ) : (
-        // NORMAL CAMERA VIEW (when NOT processing)
-        <>
+        // CAMERA VIEW - Normal scanning interface
+        <View style={{ flex: 1 }}>
+          <CameraView
+            ref={cameraRef}
+            style={{ flex: 1 }}
+            facing="back"
+            onCameraReady={() => {
+              console.log("📷 Camera onCameraReady fired!");
+              // CLEAR previous timeout to prevent duplicate auto-captures
+              if (captureTimeoutRef.current) {
+                clearTimeout(captureTimeoutRef.current);
+                console.log("🧹 Cleared previous timeout");
+              }
+              cameraReadyRef.current = true;
+              setCameraReady(true);
 
-      <CameraView
-        ref={cameraRef}
-        style={{ flex: 1 }}
-        facing="back"
-        onCameraReady={() => {
-          console.log("📷 Camera onCameraReady fired!");
-          // CLEAR previous timeout to prevent duplicate auto-captures
-          if (captureTimeoutRef.current) {
-            clearTimeout(captureTimeoutRef.current);
-            console.log("🧹 Cleared previous timeout");
-          }
-          cameraReadyRef.current = true;
-          setCameraReady(true);
-          
-          // ONLY auto-capture if: in initial mode AND haven't auto-captured yet
-          // AND backend is not known to be unreachable
-          if (
-            photoMode === "initial" &&
-            !autoCaptureDoneRef.current &&
-            !capturing &&
-            connected !== false
-          ) {
-            console.log("📷 Camera ready - auto-capture will start in 2s");
-            setDebugMsg("Camera ready - auto-capturing in 2s...");
-            captureTimeoutRef.current = setTimeout(() => {
-              console.log("⏱️ 2 seconds elapsed, calling autoCapturePhoto");
-              autoCaptureDoneRef.current = true; // Mark as done
-              autoCapturePhoto();
-            }, 2000);
-          } else {
-            console.log("⏭️ Skipping auto-capture:", {
-              photoMode,
-              autoCaptureAlreadyDone: autoCaptureDoneRef.current,
-              stillCapturing: capturing,
-            });
-            setDebugMsg("Camera ready - Tap to capture");
-          }
-        }}
-      >
-        <View
-          style={{
-            flex: 1,
-            justifyContent: "center",
-            alignItems: "center",
-            backgroundColor: "rgba(0, 0, 0, 0.3)",
-          }}
-        >
+              // ONLY auto-capture if: in initial mode AND haven't auto-captured yet
+              // AND backend is not known to be unreachable
+              if (
+                photoMode === "initial" &&
+                !autoCaptureDoneRef.current &&
+                !capturing &&
+                connected !== false
+              ) {
+                console.log("📷 Camera ready - auto-capture will start in 2s");
+                setDebugMsg("Camera ready - auto-capturing in 2s...");
+                captureTimeoutRef.current = setTimeout(() => {
+                  console.log(
+                    "⏱️ 2 seconds elapsed, calling autoCapturePhoto"
+                  );
+                  autoCaptureDoneRef.current = true; // Mark as done
+                  autoCapturePhoto();
+                }, 2000);
+              } else {
+                console.log("⏭️ Skipping auto-capture:", {
+                  photoMode,
+                  autoCaptureAlreadyDone: autoCaptureDoneRef.current,
+                  stillCapturing: capturing,
+                });
+                setDebugMsg("Camera ready - Tap to capture");
+              }
+            }}
+          />
+
+          {/* Overlay Controls (absolute positioned on top of camera) */}
           <View
             style={{
-              width: "80%",
-              aspectRatio: 1,
-              borderWidth: 3,
-              borderColor: "#3B82F6",
-              borderRadius: 20,
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
               justifyContent: "center",
               alignItems: "center",
+              backgroundColor: "rgba(0, 0, 0, 0.3)",
+              pointerEvents: "box-none",
             }}
           >
-            <Text
+            <View
               style={{
-                color: "#3B82F6",
-                fontSize: 18,
-                fontFamily: "Inter_500Medium",
+                width: "80%",
+                aspectRatio: 1,
+                borderWidth: 3,
+                borderColor: "#3B82F6",
+                borderRadius: 20,
+                justifyContent: "center",
+                alignItems: "center",
               }}
             >
-              {capturing ? "📸 Scanning..." : "📸 Point at label"}
-            </Text>
-          </View>
+              <Text
+                style={{
+                  color: "#3B82F6",
+                  fontSize: 18,
+                  fontFamily: "Inter_500Medium",
+                }}
+              >
+                {capturing ? "📸 Scanning..." : "📸 Point at label"}
+              </Text>
+            </View>
 
-          {/* Manual capture button as backup */}
-          <Pressable
-            onPress={manualCapture}
-            disabled={capturing}
-            style={{
-              marginTop: 40,
-              backgroundColor: "#EF4444",
-              paddingHorizontal: 30,
-              paddingVertical: 12,
-              borderRadius: 8,
-            }}
-          >
-            <Text style={{ color: "#FFF", fontWeight: "bold", fontSize: 16 }}>
-              {capturing ? "Processing..." : "Tap to Capture"}
-            </Text>
-          </Pressable>
+            {/* Manual capture button as backup */}
+            <Pressable
+              onPress={manualCapture}
+              disabled={capturing}
+              style={{
+                marginTop: 40,
+                backgroundColor: "#EF4444",
+                paddingHorizontal: 30,
+                paddingVertical: 12,
+                borderRadius: 8,
+              }}
+            >
+              <Text style={{ color: "#FFF", fontWeight: "bold", fontSize: 16 }}>
+                {capturing ? "Processing..." : "Tap to Capture"}
+              </Text>
+            </Pressable>
 
-          {/* Multi-photo controls */}
-          {photoMode === "capturing_more" && (
-            <View style={{ marginTop: 30, gap: 12, width: "80%", paddingHorizontal: 20 }}>
-              {/* Photo count warning */}
-              {photos.length >= 4 && (
-                <View
+            {/* Multi-photo controls */}
+            {photoMode === "capturing_more" && (
+              <View
+                style={{
+                  marginTop: 30,
+                  gap: 12,
+                  width: "80%",
+                  paddingHorizontal: 20,
+                }}
+              >
+                {/* Photo count warning */}
+                {photos.length >= 4 && (
+                  <View
+                    style={{
+                      backgroundColor: "#FEF3C7",
+                      borderLeftWidth: 4,
+                      borderLeftColor: "#F59E0B",
+                      padding: 12,
+                      borderRadius: 4,
+                      marginBottom: 8,
+                    }}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 12,
+                        color: "#92400E",
+                        fontWeight: "600",
+                      }}
+                    >
+                      ⚠️ Maximum 4 photos allowed. Process now to scan.
+                    </Text>
+                  </View>
+                )}
+
+                {/* Capture More Button */}
+                <Pressable
+                  onPress={manualCapture}
+                  disabled={capturing || photos.length >= 4}
                   style={{
-                    backgroundColor: "#FEF3C7",
-                    borderLeftWidth: 4,
-                    borderLeftColor: "#F59E0B",
-                    padding: 12,
-                    borderRadius: 4,
-                    marginBottom: 8,
+                    backgroundColor:
+                      photos.length >= 4 ? "#9CA3AF" : "#3B82F6",
+                    paddingVertical: 12,
+                    borderRadius: 8,
+                    alignItems: "center",
                   }}
                 >
                   <Text
                     style={{
-                      fontSize: 12,
-                      color: "#92400E",
-                      fontWeight: "600",
+                      color: "#FFF",
+                      fontWeight: "bold",
+                      fontSize: 16,
                     }}
                   >
-                    ⚠️ Maximum 4 photos allowed. Process now to scan.
+                    📸 Capture More ({photos.length}
+                    {photos.length >= 4 ? " - MAX" : ""})
+                  </Text>
+                </Pressable>
+
+                {/* Process Photos Button */}
+                <Pressable
+                  onPress={processAllPhotos}
+                  disabled={capturing}
+                  style={{
+                    backgroundColor: "#10B981",
+                    paddingVertical: 12,
+                    borderRadius: 8,
+                    alignItems: "center",
+                  }}
+                >
+                  <Text style={{ color: "#FFF", fontWeight: "bold", fontSize: 16 }}>
+                    ✅ Process All Photos
+                  </Text>
+                </Pressable>
+
+                {/* Cancel Button */}
+                <Pressable
+                  onPress={cancelPhotos}
+                  disabled={capturing}
+                  style={{
+                    backgroundColor: "#6B7280",
+                    paddingVertical: 10,
+                    borderRadius: 8,
+                    alignItems: "center",
+                  }}
+                >
+                  <Text
+                    style={{
+                      color: "#FFF",
+                      fontWeight: "bold",
+                      fontSize: 14,
+                    }}
+                  >
+                    ❌ Cancel & Restart
+                  </Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
+
+          {/* Debug Info (absolute positioned at bottom) */}
+          <View
+            style={{
+              position: "absolute",
+              bottom: 40,
+              left: 0,
+              right: 0,
+              alignItems: "center",
+            }}
+          >
+            {/* Debug message */}
+            <View style={{ marginBottom: 16, paddingHorizontal: 20 }}>
+              <Text
+                style={{
+                  color: "#FFF",
+                  fontSize: 12,
+                  textAlign: "center",
+                }}
+              >
+                {debugMsg}
+              </Text>
+            </View>
+
+            {/* Connection status */}
+            {connected === false && (
+              <View style={{ marginBottom: 12, paddingHorizontal: 20 }}>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                >
+                  <AlertCircle size={20} color="#EF4444" />
+                  <Text
+                    style={{
+                      color: "#EF4444",
+                      fontSize: 14,
+                      flex: 1,
+                    }}
+                  >
+                    Backend unreachable
                   </Text>
                 </View>
-              )}
-
-              {/* Capture More Button */}
-              <Pressable
-                onPress={manualCapture}
-                disabled={capturing || photos.length >= 4}
-                style={{
-                  backgroundColor: photos.length >= 4 ? "#9CA3AF" : "#3B82F6",
-                  paddingVertical: 12,
-                  borderRadius: 8,
-                  alignItems: "center",
-                }}
-              >
-                <Text style={{ color: "#FFF", fontWeight: "bold", fontSize: 16 }}>
-                  📸 Capture More ({photos.length}{photos.length >= 4 ? " - MAX" : ""})
-                </Text>
-              </Pressable>
-
-              {/* Process Photos Button */}
-              <Pressable
-                onPress={processAllPhotos}
-                disabled={capturing}
-                style={{
-                  backgroundColor: "#10B981",
-                  paddingVertical: 12,
-                  borderRadius: 8,
-                  alignItems: "center",
-                }}
-              >
-                <Text style={{ color: "#FFF", fontWeight: "bold", fontSize: 16 }}>
-                  ✅ Process All Photos
-                </Text>
-              </Pressable>
-
-              {/* Cancel Button */}
-              <Pressable
-                onPress={cancelPhotos}
-                disabled={capturing}
-                style={{
-                  backgroundColor: "#6B7280",
-                  paddingVertical: 10,
-                  borderRadius: 8,
-                  alignItems: "center",
-                }}
-              >
-                <Text style={{ color: "#FFF", fontWeight: "bold", fontSize: 14 }}>
-                  ❌ Cancel & Restart
-                </Text>
-              </Pressable>
-            </View>
-          )}
-        </View>
-      </CameraView>
-
-      <View
-        style={{
-          position: "absolute",
-          bottom: 40,
-          left: 0,
-          right: 0,
-          alignItems: "center",
-        }}
-      >
-        {/* Debug message */}
-        <View style={{ marginBottom: 16, paddingHorizontal: 20 }}>
-          <Text style={{ color: "#FFF", fontSize: 12, textAlign: "center" }}>
-            {debugMsg}
-          </Text>
-        </View>
-
-        {connected === false && (
-          <View style={{ marginBottom: 12, paddingHorizontal: 20 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <AlertCircle size={20} color="#EF4444" />
-              <Text style={{ color: "#EF4444", fontSize: 14, flex: 1 }}>
-                Backend unreachable
-              </Text>
-            </View>
+              </View>
+            )}
+            {connected === true && (
+              <View style={{ marginBottom: 12 }}>
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 4,
+                  }}
+                >
+                  <CheckCircle size={16} color="#10B981" />
+                  <Text
+                    style={{
+                      color: "#10B981",
+                      fontSize: 12,
+                    }}
+                  >
+                    Connected
+                  </Text>
+                </View>
+              </View>
+            )}
           </View>
-        )}
-        {connected === true && (
-          <View style={{ marginBottom: 12 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-              <CheckCircle size={16} color="#10B981" />
-              <Text style={{ color: "#10B981", fontSize: 12 }}>
-                Connected
-              </Text>
-            </View>
-          </View>
-        )}
-      </View>
-        </>
+        </View>
       )}
     </View>
   );

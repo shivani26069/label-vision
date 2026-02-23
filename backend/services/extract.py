@@ -89,7 +89,7 @@ def extract_with_gemini(ocr_text: str) -> Dict[str, Any]:
             prompt,
             generation_config=genai.GenerationConfig(
                 temperature=0.1,        # LOW temp = consistent, not creative
-                max_output_tokens=2048, # Increased from 1024 for full JSON response
+                max_output_tokens=4096, # INCREASED from 2048 to prevent cutoff
             ),
         )
         raw = response.text.strip()
@@ -107,12 +107,30 @@ def extract_with_gemini(ocr_text: str) -> Dict[str, Any]:
         if match:
             raw = match.group(0)
 
-        # If it's an array with single object, extract just the object
-        if raw.startswith('[') and raw.endswith(']'):
-            parsed_array = json.loads(raw)
-            result = parsed_array[0] if isinstance(parsed_array, list) and len(parsed_array) > 0 else {}
-        else:
+        # Try to fix incomplete JSON with unterminated strings
+        # Count unclosed quotes - if odd, add closing quote before closing brace
+        try:
             result = json.loads(raw)
+        except json.JSONDecodeError:
+            # Try to repair: close any unterminated strings
+            if raw.count('"') % 2 == 1:
+                # Odd number of quotes = unterminated string
+                # Find last opening quote and close it
+                last_quote_pos = raw.rfind('"')
+                if last_quote_pos > 0 and last_quote_pos < len(raw) - 1:
+                    # Close the string and any unclosed JSON structures
+                    repaired = raw[:last_quote_pos+1] + '}'
+                    try:
+                        result = json.loads(repaired)
+                    except:
+                        raise  # Re-raise if repair didn't work
+            else:
+                raise  # Re-raise original error
+
+        # If it's an array with single object, extract just the object
+        if isinstance(result, list) and len(result) > 0:
+            result = result[0]
+        
         result["ingredients"] = result.get("ingredients") or []
         result["warnings"] = result.get("warnings") or []
 
