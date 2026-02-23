@@ -235,12 +235,18 @@ def extract_from_pipeline(front_text, back_text, full_text=None):
         score += 0.35
     else:
         score += 0.10
-    if extracted.get("brand"):         score += 0.20
-    if extracted.get("expiry_date"):   score += 0.20
-    if extracted.get("mfg_date"):      score += 0.05
-    if extracted.get("ingredients"):   score += min(len(extracted["ingredients"]), 10) * 0.01
-    if extracted.get("warnings"):      score += 0.05
-    if len(combined.strip()) < 50:     score *= 0.5   # penalise bad scans
+    if extracted.get("brand"):
+        score += 0.20
+    if extracted.get("expiry_date"):
+        score += 0.20
+    if extracted.get("mfg_date"):
+        score += 0.05
+    if extracted.get("ingredients"):
+        score += min(len(extracted["ingredients"]), 10) * 0.01
+    if extracted.get("warnings"):
+        score += 0.05
+    if len(combined.strip()) < 50:
+        score *= 0.5   # penalise bad scans
 
     return {
         "product_name": extracted.get("product_name"),
@@ -251,5 +257,3 @@ def extract_from_pipeline(front_text, back_text, full_text=None):
         "warnings":     extracted.get("warnings", []),
         "confidence":   round(min(score, 1.0), 3),
     }
-    print(f"\n✨ FINAL PIPELINE OUTPUT:\n{result}\n{'='*80}\n")
-    return result

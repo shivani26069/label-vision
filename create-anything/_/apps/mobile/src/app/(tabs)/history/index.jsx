@@ -5,7 +5,7 @@ import { useRouter } from "expo-router";
 import { Clock, Package } from "lucide-react-native";
 import HapticButton from "@/components/HapticButton";
 import { useScanStore } from "@/utils/scanStore";
-import { getHistory } from "@/utils/api";
+import { getHistory, getScanDetail } from "@/utils/api";
 import {
   useFonts,
   Inter_600SemiBold,
@@ -67,17 +67,15 @@ export default function HistoryScreen() {
     }
   };
 
-  const handleScanPress = (scan) => {
-    // Use actual backend data
-    const normalized = {
-      id: scan.id,
-      product_name: scan.productName || 'Unknown Product',
-      brand: scan.brand || 'Unknown Brand',
-      confidence: scan.confidence || 0,
-      scannedAt: scan.scannedAt,
-    };
-    setCurrentScan(normalized);
-    router.push("/(tabs)/home/result");
+  const handleScanPress = async (scan) => {
+    try {
+      const fullScan = await getScanDetail(scan.id);
+      // fullScan shape: { id, rawText, extracted, confidence, scannedAt }
+      setCurrentScan(fullScan.extracted);
+      router.push("/(tabs)/home/result");
+    } catch (e) {
+      console.error('Failed to load scan detail:', e);
+    }
   };
 
   return (

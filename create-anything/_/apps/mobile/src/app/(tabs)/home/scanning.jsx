@@ -23,6 +23,7 @@ export default function ScanningScreen() {
   const cameraRef = useRef(null);
   const captureTimeoutRef = useRef(null);
   const autoCaptureDoneRef = useRef(false); // Prevent duplicate auto-captures
+  const cameraReadyRef = useRef(false);
   const [capturing, setCapturing] = useState(false);
   const [connected, setConnected] = useState(null);
   const [cameraReady, setCameraReady] = useState(false);
@@ -43,8 +44,12 @@ export default function ScanningScreen() {
   });
 
   const capturePhoto = async () => {
-    if (capturing || !cameraReady || !cameraRef.current) {
-      console.log("⚠️ Cannot capture:", { capturing, cameraReady, hasRef: !!cameraRef.current });
+    if (capturing || !cameraReadyRef.current || !cameraRef.current) {
+      console.log("⚠️ Cannot capture:", {
+        capturing,
+        cameraReady: cameraReadyRef.current,
+        hasRef: !!cameraRef.current,
+      });
       return;
     }
 
@@ -97,57 +102,56 @@ export default function ScanningScreen() {
       return;
     }
 
+    console.log(`🚀 Processing ${photos.length} photos...`);
+    console.log("🎬 Setting isProcessing=true, showing modal...");
+    setIsProcessing(true);
+    setProcessingStage("uploading");
+    setUploadProgress(0);
+
+    // Simulate upload progress
+    const uploadInterval = setInterval(() => {
+      setUploadProgress((prev) => {
+        if (prev >= 90) {
+          clearInterval(uploadInterval);
+          return 90;
+        }
+        return prev + Math.random() * 15;
+      });
+    }, 500);
+
+    // Stage timers: roughly match expected backend phases
+    const stageTimer1 = setTimeout(() => setProcessingStage("ocr"), 8000); // 8s → OCR
+    const stageTimer2 = setTimeout(
+      () => setProcessingStage("gemini"),
+      25000
+    ); // 25s → Gemini
+
     try {
-      console.log(`🚀 Processing ${photos.length} photos...`);
-      console.log("🎬 Setting isProcessing=true, showing modal...");
-      setIsProcessing(true);
-      setProcessingStage("uploading");
-      setUploadProgress(0);
+      console.log("📤 Sending to backend...");
+      const scanResult = await scanImage(photos);
 
-      try {
-        console.log("📤 Sending to backend...");
-        
-        // Simulate upload progress
-        const uploadInterval = setInterval(() => {
-          setUploadProgress((prev) => {
-            if (prev >= 90) {
-              clearInterval(uploadInterval);
-              return 90;
-            }
-            return prev + Math.random() * 15;
-          });
-        }, 500);
+      clearInterval(uploadInterval);
+      clearTimeout(stageTimer1);
+      clearTimeout(stageTimer2);
 
-        const scanResult = await scanImage(photos);
-        clearInterval(uploadInterval);
-        setUploadProgress(100);
-        
-        console.log("✅ Backend response:", scanResult);
-        
-        // Transition through stages
-        setProcessingStage("ocr");
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        setProcessingStage("gemini");
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        setProcessingStage("complete");
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        setCurrentScan(scanResult);
-        setPhotos([]); // Reset photos
-        setPhotoMode("initial");
-        setIsProcessing(false);
-        router.replace("/(tabs)/home/result");
-      } catch (apiError) {
-        console.error("❌ Backend failed:", apiError);
-        setIsProcessing(false);
-        alert("Backend error: " + apiError.message);
-      }
-    } catch (e) {
-      console.error("❌ Process error:", e);
+      setUploadProgress(100);
+      console.log("✅ Backend response:", scanResult);
+
+      setProcessingStage("complete");
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      setCurrentScan(scanResult);
+      setPhotos([]); // Reset photos
+      setPhotoMode("initial");
       setIsProcessing(false);
-      alert("Error: " + e.message);
+      router.replace("/(tabs)/home/result");
+    } catch (apiError) {
+      console.error("❌ Backend failed:", apiError);
+      clearInterval(uploadInterval);
+      clearTimeout(stageTimer1);
+      clearTimeout(stageTimer2);
+      setIsProcessing(false);
+      alert("Backend error: " + apiError.message);
     }
   };
 
@@ -193,19 +197,24 @@ export default function ScanningScreen() {
   // Reset state when screen comes into focus (after returning from result screen)
   useFocusEffect(
     useCallback(() => {
-      console.log("🔄 Screen focused - resetting capture state");
-      setCapturing(false);
-      setCameraReady(false);
-      setPhotos([]);
-      setPhotoMode("initial");
-      setIsProcessing(false); // RESET processing modal
-      autoCaptureDoneRef.current = false; // Reset auto-capture flag so it can run again
+      console.log("🔄 Screen focused");
+
+      // Only reset capture state if we are NOT actively processing a scan
+      if (!isProcessing) {
+        console.log("🔄 Resetting capture state (not processing)");
+        setCapturing(false);
+        setCameraReady(false);
+        cameraReadyRef.current = false;
+        setPhotos([]);
+        setPhotoMode("initial");
+        autoCaptureDoneRef.current = false; // Reset auto-capture flag so it can run again
+      }
       return () => {
         if (captureTimeoutRef.current) {
           clearTimeout(captureTimeoutRef.current);
         }
       };
-    }, [])
+    }, [isProcessing])
   );
 
   if (!fontsLoaded) {
@@ -436,6 +445,7 @@ export default function ScanningScreen() {
             clearTimeout(captureTimeoutRef.current);
             console.log("🧹 Cleared previous timeout");
           }
+          cameraReadyRef.current = true;
           setCameraReady(true);
           
           // ONLY auto-capture if: in initial mode AND haven't auto-captured yet

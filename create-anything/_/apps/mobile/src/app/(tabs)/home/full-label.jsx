@@ -31,7 +31,15 @@ export default function FullLabelScreen() {
   }
 
   const playFullLabel = () => {
-    const fullText = currentScan.rawText || `${currentScan.product}. Manufactured ${currentScan.mfgDate}. Expires ${currentScan.expiry}. Ingredients: ${currentScan.ingredients.join(", ")}. ${currentScan.warnings.length > 0 ? "Warnings: " + currentScan.warnings.join(". ") : "No warnings"}.`;
+    const fullText =
+      currentScan.raw_ocr ||
+      `${currentScan.product_name || "Unknown product"}. ` +
+      (currentScan.mfg_date ? `Manufactured ${currentScan.mfg_date}. ` : "") +
+      (currentScan.expiry_date ? `Expires ${currentScan.expiry_date}. ` : "") +
+      `Ingredients: ${currentScan.ingredients?.join(", ") || "Unknown"}. ` +
+      (currentScan.warnings?.length > 0
+        ? "Warnings: " + currentScan.warnings.join(". ")
+        : "No warnings.");
     speak(fullText);
   };
 
@@ -100,7 +108,10 @@ export default function FullLabelScreen() {
               lineHeight: 28,
             }}
           >
-            {currentScan.summary || `${currentScan.product}. Expires ${currentScan.expiry}.`}
+            {currentScan.summary ||
+              `${currentScan.product_name || "Unknown product"}${
+                currentScan.expiry_date ? `. Expires ${currentScan.expiry_date}.` : ""
+              }`}
           </Text>
         </View>
 

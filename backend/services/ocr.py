@@ -6,6 +6,7 @@ from PIL import Image
 import pytesseract
 from dotenv import load_dotenv
 from typing import Union
+import platform
 try:
     import easyocr
 except ImportError:
@@ -15,7 +16,9 @@ load_dotenv()
 
 class SimpleOCRClient:
     def __init__(self):
-        self.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+        # Configure Tesseract binary on Windows; on other OSs, rely on PATH
+        if platform.system() == "Windows":
+            pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
         # Tesseract config for product labels
         # PSM 3 = Fully automatic page segmentation (handles mixed text sizes/layouts)
         # OEM 3 = Legacy + LSTM mode (most accurate)

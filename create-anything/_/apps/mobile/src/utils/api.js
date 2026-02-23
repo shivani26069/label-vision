@@ -1,16 +1,23 @@
-const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'http://192.168.1.2:8000';
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'http://192.168.1.6:8000';
 
 // Test connectivity
 export const testConnection = async () => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
+
   try {
     const response = await fetch(`${API_BASE}/health`, {
       method: 'GET',
-      timeout: 5000,
+      signal: controller.signal,
     });
+
+    clearTimeout(timeoutId);
+
     const data = await response.json();
     console.log('Connection test:', data);
     return data;
   } catch (error) {
+    clearTimeout(timeoutId);
     console.error('Connection test failed:', error);
     throw error;
   }
@@ -79,9 +86,11 @@ export const scanImage = async (imageUri) => {
       xhr.timeout = 1200000;
       
       // Create FormData with file(s)
+      // IMPORTANT: /scan expects 'file' (singular), /scanMultiple expects 'files' (plural)
       const formData = new FormData();
+      const fieldName = isMultiple ? 'files' : 'file';  // Correct key for endpoint
       imageUris.forEach((uri, index) => {
-        formData.append('files' + (isMultiple ? '' : ''), {
+        formData.append(fieldName, {
           uri: uri,
           type: 'image/jpeg',
           name: `label_scan_${index + 1}.jpg`,
