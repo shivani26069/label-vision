@@ -68,13 +68,12 @@ export default function HistoryScreen() {
   };
 
   const handleScanPress = (scan) => {
-    // Normalize remote scan to local shape if needed
+    // Use actual backend data
     const normalized = {
       id: scan.id,
-      product: scan.summary?.split('.')[0] || 'Unknown',
-      expiry: scan.summary?.match(/Expires (.+?)(?:\.|$)/)?.[1] || '',
-      summary: scan.summary,
-      confidence: scan.confidence,
+      product_name: scan.productName || 'Unknown Product',
+      brand: scan.brand || 'Unknown Brand',
+      confidence: scan.confidence || 0,
       scannedAt: scan.scannedAt,
     };
     setCurrentScan(normalized);
@@ -205,13 +204,24 @@ export default function HistoryScreen() {
                       marginBottom: 4,
                     }}
                   >
-                    {scan.summary?.split('.')[0] || 'Unknown'}
+                    {scan.productName || 'Unknown Product'}
                   </Text>
                   <Text
                     style={{
                       fontSize: 14,
                       fontFamily: "Inter_400Regular",
                       color: isDark ? "#9CA3AF" : "#6B7280",
+                      marginBottom: 6,
+                    }}
+                  >
+                    {scan.brand && `${scan.brand} • `}
+                    {scan.confidence ? `${(scan.confidence * 100).toFixed(0)}% confidence` : 'No data'}
+                  </Text>
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      fontFamily: "Inter_400Regular",
+                      color: isDark ? "#6B7280" : "#9CA3AF",
                     }}
                   >
                     {formatDate(scan.scannedAt)}

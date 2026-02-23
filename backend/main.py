@@ -80,6 +80,7 @@ async def scan(
         logger.info("🔍 Running OCR on full image...")
         full_text = ocr_client.extract_text(image_bytes)
         logger.info(f"✅ OCR extracted {len(full_text)} chars")
+        logger.info(f"📄 RAW OCR TEXT:\n{full_text}\n{'='*80}")  # Print full OCR text
         
         if len(full_text.strip()) < 5:
             result = {
@@ -105,6 +106,7 @@ async def scan(
                 "warnings": extraction.get("warnings", []),
                 "confidence": extraction.get("confidence", 0.0),
                 "id": str(uuid.uuid4())[:8],
+                "scannedAt": datetime.utcnow().isoformat() + "Z",
                 "raw_ocr": full_text[:500]  # Debug info
             }
         
@@ -127,7 +129,104 @@ async def scan(
         logger.error("❌ Scan error", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-# History list (paginated)
+# Multi-image scan endpoint - accepts multiple images and combines OCR text
+@app.post("/scanMultiple")
+async def scan_multiple(
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+):
+    logger.info(f"📥 Received {len(files)} files for multi-image scan")
+    
+    if not files or len(files) == 0:
+        raise HTTPException(status_code=400, detail="At least one file required")
+    
+    try:
+        combined_text = ""
+        image_details = []
+        
+        # Process each image
+        for idx, file in enumerate(files, 1):
+            logger.info(f"📸 Processing image {idx}/{len(files)}: {file.filename}")
+            
+            if not file.content_type or not file.content_type.startswith("image/"):
+                logger.warning(f"⚠️ Skipping non-image file: {file.filename}")
+                continue
+            
+            image_bytes = await file.read()
+            logger.info(f"📦 Image {idx} size: {len(image_bytes)} bytes")
+            
+            # Run OCR on each image
+            logger.info(f"🔍 Running OCR on image {idx}...")
+            image_text = ocr_client.extract_text(image_bytes)
+            logger.info(f"✅ Image {idx} OCR extracted {len(image_text)} chars")
+            logger.info(f"📄 IMAGE {idx} RAW OCR TEXT:\n{image_text}\n{'='*80}")
+            
+            image_details.append({
+                "image_num": idx,
+                "filename": file.filename,
+                "text_length": len(image_text),
+                "text": image_text
+            })
+            
+            # Combine all text with separators
+            combined_text += f"\n[IMAGE {idx}: {file.filename}]\n{image_text}\n"
+        
+        if len(image_details) == 0:
+            raise HTTPException(status_code=400, detail="No valid images provided")
+        
+        logger.info(f"📝 Combined text from {len(image_details)} images: {len(combined_text)} chars total")
+        logger.info(f"📊 COMBINED OCR TEXT FROM ALL IMAGES:\n{combined_text}\n{'='*80}")
+        
+        if len(combined_text.strip()) < 5:
+            result = {
+                "product_name": None,
+                "brand": None,
+                "expiry_date": None,
+                "mfg_date": None,
+                "ingredients": [],
+                "warnings": [],
+                "confidence": 0.0,
+                "id": str(uuid.uuid4())[:8],
+                "failure_reason": "No text detected in any image",
+                "images_processed": len(image_details)
+            }
+        else:
+            # Extract structured data from combined text
+            # Pass all variants to extraction for better matching
+            extraction = extract_from_pipeline(combined_text, combined_text, combined_text)
+            result = {
+                "product_name": extraction.get("product_name"),
+                "brand": extraction.get("brand"),
+                "expiry_date": extraction.get("expiry_date"),
+                "mfg_date": extraction.get("mfg_date"),
+                "ingredients": extraction.get("ingredients", []),
+                "warnings": extraction.get("warnings", []),
+                "confidence": extraction.get("confidence", 0.0),
+                "id": str(uuid.uuid4())[:8],
+                "scannedAt": datetime.utcnow().isoformat() + "Z",
+                "raw_ocr": combined_text[:500],  # Debug info
+                "images_processed": len(image_details),
+                "image_sources": [d["filename"] for d in image_details]
+            }
+        
+        # Store in DB
+        scan_id = result["id"]
+        db_scan = ScanHistory(
+            id=scan_id,
+            raw_text=combined_text[:2000],  # Store more text for multi-image scans
+            extracted_json=result,
+            confidence=result["confidence"],
+        )
+        db.add(db_scan)
+        db.commit()
+        db.refresh(db_scan)
+        
+        logger.info(f"✅ Multi-image scan complete: {scan_id} ({len(image_details)} images)")
+        return result
+        
+    except Exception as e:
+        logger.error("❌ Multi-image scan error", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 @app.get("/history")
 def history(
     page: int = Query(1, ge=1),
@@ -145,9 +244,10 @@ def history(
     return [
         {
             "id": s.id,
-            "summary": s.extracted_json.get("summary"),
+            "productName": s.extracted_json.get("product_name"),
+            "brand": s.extracted_json.get("brand"),
             "confidence": s.confidence,
-            "scannedAt": s.extracted_json.get("scannedAt"),
+            "scannedAt": s.extracted_json.get("scannedAt") or s.created_at.isoformat() + "Z",
         }
         for s in scans
     ]

@@ -84,15 +84,17 @@ def extract_with_gemini(ocr_text: str) -> Dict[str, Any]:
 
     try:
         print("🤖 Sending to Gemini...")
+        print(f"📝 TEXT BEING SENT TO GEMINI (first 1000 chars):\n{ocr_text[:1000]}\n{'='*80}")
         response = model.generate_content(
             prompt,
             generation_config=genai.GenerationConfig(
                 temperature=0.1,        # LOW temp = consistent, not creative
-                max_output_tokens=1024,
+                max_output_tokens=2048, # Increased from 1024 for full JSON response
             ),
         )
         raw = response.text.strip()
         print(f"✅ Gemini raw (first 200): {raw[:200]}")
+        print(f"📤 FULL GEMINI RESPONSE:\n{raw}\n{'='*80}")
 
         # Strip markdown fences if Gemini wraps in ```json ... ```
         if "```json" in raw:
@@ -100,12 +102,17 @@ def extract_with_gemini(ocr_text: str) -> Dict[str, Any]:
         elif "```" in raw:
             raw = raw.split("```")[1].split("```")[0].strip()
 
-        # Find first { ... } block in case there's any preamble
-        match = re.search(r'\{.*\}', raw, re.DOTALL)
+        # Find first [ ... ] (array) or { ... } (object) block in case there's any preamble
+        match = re.search(r'[\[\{].*[\]\}]', raw, re.DOTALL)
         if match:
             raw = match.group(0)
 
-        result = json.loads(raw)
+        # If it's an array with single object, extract just the object
+        if raw.startswith('[') and raw.endswith(']'):
+            parsed_array = json.loads(raw)
+            result = parsed_array[0] if isinstance(parsed_array, list) and len(parsed_array) > 0 else {}
+        else:
+            result = json.loads(raw)
         result["ingredients"] = result.get("ingredients") or []
         result["warnings"] = result.get("warnings") or []
 
@@ -114,6 +121,7 @@ def extract_with_gemini(ocr_text: str) -> Dict[str, Any]:
             result["product_name"] = _heuristic_product_name(ocr_text)
 
         print(f"✅ product_name={result.get('product_name')}, brand={result.get('brand')}")
+        print(f"📊 FINAL EXTRACTED RESULT:\n{result}\n{'='*80}")
         return result
 
     except json.JSONDecodeError as e:
@@ -201,6 +209,8 @@ def extract_from_pipeline(front_text, back_text, full_text=None):
     if full_text:
         combined = f"{full_text}\n{combined}".strip()
 
+    print(f"\n🔍 EXTRACT_FROM_PIPELINE INPUT TEXT:\n{combined}\n{'='*80}\n")
+
     if not combined or len(combined) < 5:
         return {
             "product_name": None, "brand": None,
@@ -241,4 +251,5 @@ def extract_from_pipeline(front_text, back_text, full_text=None):
         "warnings":     extracted.get("warnings", []),
         "confidence":   round(min(score, 1.0), 3),
     }
-
+    print(f"\n✨ FINAL PIPELINE OUTPUT:\n{result}\n{'='*80}\n")
+    return result

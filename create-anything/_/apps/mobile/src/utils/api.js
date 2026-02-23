@@ -1,4 +1,4 @@
-const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'http://192.168.1.5:8000';
+const API_BASE = process.env.EXPO_PUBLIC_API_BASE || 'http://192.168.1.2:8000';
 
 // Test connectivity
 export const testConnection = async () => {
@@ -19,19 +19,31 @@ export const testConnection = async () => {
 export const scanImage = async (imageUri) => {
   return new Promise((resolve, reject) => {
     try {
-      console.log('🎯 Starting image upload...', imageUri);
+      // Handle both single image and multiple images
+      const imageUris = Array.isArray(imageUri) ? imageUri : [imageUri];
+      const isMultiple = Array.isArray(imageUri);
       
-      // Use XMLHttpRequest which works better in React Native
+      console.log(`🎯 Starting image upload... (${imageUris.length} image${imageUris.length > 1 ? 's' : ''})`);
+      
       const xhr = new XMLHttpRequest();
+      let timeoutId = null;
+      
+      // Cleanup function
+      const cleanup = () => {
+        if (timeoutId) clearTimeout(timeoutId);
+        xhr.abort();
+      };
       
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
-          const percent = (e.loaded / e.total) * 100;
+          // Cap progress at 100% to handle edge cases where loaded > total
+          const percent = Math.min(100, (e.loaded / e.total) * 100);
           console.log(`📤 Upload progress: ${percent.toFixed(0)}%`);
         }
       };
       
       xhr.onload = () => {
+        if (timeoutId) clearTimeout(timeoutId);
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
             const result = JSON.parse(xhr.responseText);
@@ -45,22 +57,44 @@ export const scanImage = async (imageUri) => {
         }
       };
       
-      xhr.onerror = () => reject(new Error('Network request failed'));
-      xhr.ontimeout = () => reject(new Error('Request timeout'));
+      xhr.onerror = () => {
+        if (timeoutId) clearTimeout(timeoutId);
+        console.error('❌ XHR error');
+        reject(new Error('Network request failed'));
+      };
       
-      const uploadUrl = `${API_BASE}/scan`;
+      xhr.ontimeout = () => {
+        if (timeoutId) clearTimeout(timeoutId);
+        console.error('❌ XHR timeout');
+        reject(new Error('Request timeout'));
+      };
+
+      const endpoint = isMultiple ? '/scanMultiple' : '/scan';
+      const uploadUrl = `${API_BASE}${endpoint}`;
       console.log('📤 Uploading to:', uploadUrl);
       
       xhr.open('POST', uploadUrl, true);
-      xhr.timeout = 30000;
+      // IMPORTANT: OCR + Gemini extraction takes 3-4 minutes with variable network
+      // Using 20 minute timeout to handle slow networks without zombie connections
+      xhr.timeout = 1200000;
       
-      // Create FormData with file URI
+      // Create FormData with file(s)
       const formData = new FormData();
-      formData.append('file', {
-        uri: imageUri,
-        type: 'image/jpeg',
-        name: 'label_scan.jpg',
+      imageUris.forEach((uri, index) => {
+        formData.append('files' + (isMultiple ? '' : ''), {
+          uri: uri,
+          type: 'image/jpeg',
+          name: `label_scan_${index + 1}.jpg`,
+        });
       });
+
+      // Set up fallback timeout (5 seconds longer than xhr.timeout)
+      const fallbackTimeout = 1205000;
+      timeoutId = setTimeout(() => {
+        console.error('❌ Fallback timeout triggered');
+        cleanup();
+        reject(new Error('Request timeout'));
+      }, fallbackTimeout);
       
       xhr.send(formData);
       
