@@ -67,19 +67,78 @@ export const scanImage = async (imageUri) => {
       xhr.onerror = () => {
         if (timeoutId) clearTimeout(timeoutId);
         console.error('❌ XHR error');
+
+        // #region agent log
+        fetch('http://127.0.0.1:7652/ingest/35fa7aab-4023-4fce-8f61-7456c326f435', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Debug-Session-Id': '8d7e8e',
+          },
+          body: JSON.stringify({
+            sessionId: '8d7e8e',
+            runId: 'pre-fix',
+            hypothesisId: 'H1',
+            location: 'api.js:scanImage:xhr.onerror',
+            message: 'scanImage XHR error',
+            data: {},
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
+
         reject(new Error('Network request failed'));
       };
       
       xhr.ontimeout = () => {
         if (timeoutId) clearTimeout(timeoutId);
         console.error('❌ XHR timeout');
+
+        // #region agent log
+        fetch('http://127.0.0.1:7652/ingest/35fa7aab-4023-4fce-8f61-7456c326f435', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Debug-Session-Id': '8d7e8e',
+          },
+          body: JSON.stringify({
+            sessionId: '8d7e8e',
+            runId: 'pre-fix',
+            hypothesisId: 'H1',
+            location: 'api.js:scanImage:xhr.ontimeout',
+            message: 'scanImage XHR timeout',
+            data: { timeout: xhr.timeout },
+            timestamp: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
+
         reject(new Error('Request timeout'));
       };
 
       const endpoint = isMultiple ? '/scanMultiple' : '/scan';
       const uploadUrl = `${API_BASE}${endpoint}`;
       console.log('📤 Uploading to:', uploadUrl);
-      
+
+      // #region agent log
+      fetch('http://127.0.0.1:7652/ingest/35fa7aab-4023-4fce-8f61-7456c326f435', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Debug-Session-Id': '8d7e8e',
+        },
+        body: JSON.stringify({
+          sessionId: '8d7e8e',
+          runId: 'pre-fix',
+          hypothesisId: 'H1',
+          location: 'api.js:scanImage:start',
+          message: 'scanImage start',
+          data: { uploadUrl, imageCount: imageUris.length, isMultiple },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion
+
       xhr.open('POST', uploadUrl, true);
       // IMPORTANT: OCR + Gemini extraction takes 3-4 minutes with variable network
       // Using 20 minute timeout to handle slow networks without zombie connections
