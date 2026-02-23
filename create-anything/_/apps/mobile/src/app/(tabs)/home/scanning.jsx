@@ -449,7 +449,13 @@ export default function ScanningScreen() {
           setCameraReady(true);
           
           // ONLY auto-capture if: in initial mode AND haven't auto-captured yet
-          if (photoMode === "initial" && !autoCaptureDoneRef.current && !capturing) {
+          // AND backend is not known to be unreachable
+          if (
+            photoMode === "initial" &&
+            !autoCaptureDoneRef.current &&
+            !capturing &&
+            connected !== false
+          ) {
             console.log("📷 Camera ready - auto-capture will start in 2s");
             setDebugMsg("Camera ready - auto-capturing in 2s...");
             captureTimeoutRef.current = setTimeout(() => {
