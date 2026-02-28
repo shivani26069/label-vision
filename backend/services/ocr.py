@@ -97,6 +97,16 @@ class EasyOCRClient:
     def extract_text(self, image_bytes: bytes) -> str:
         """Extract text from image bytes."""
         try:
+            # Resize large images before OCR to avoid memory issues
+            img = Image.open(io.BytesIO(image_bytes))
+            max_dimension = 1280  # EasyOCR works well at this size
+            if max(img.size) > max_dimension:
+                img.thumbnail((max_dimension, max_dimension), Image.LANCZOS)
+                buffer = io.BytesIO()
+                img.save(buffer, format="JPEG", quality=85)
+                image_bytes = buffer.getvalue()
+
+            # Use preprocessor to get numpy array for EasyOCR
             image = self.preprocess_image(image_bytes)
             # EasyOCR returns list of results: (text, confidence)
             results = self.reader.readtext(image, detail=0)

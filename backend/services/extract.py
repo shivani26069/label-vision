@@ -16,7 +16,7 @@ model = None
 if api_key:
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash")  # Use gemini-2.5-flash (newer, better)
+        model = genai.GenerativeModel("gemini-2.5-flash")
         print(f"✅ Gemini (gemini-2.5-flash) initialized successfully")
     except Exception as e:
         print(f"⚠️ Gemini initialization failed: {e}")
@@ -29,7 +29,9 @@ KNOWN_BRANDS = [
     "TONYMOLY", "LANEIGE", "AMOREPACIFIC", "INNISFREE", "ETUDE HOUSE",
     "COSRX", "PURITO", "ISNTREE", "ROUND LAB", "SKIN FUNCTIONAL",
     "DOVE", "NIVEA", "VASELINE", "CETAPHIL", "CeraVe",
-    "Neutrogena", "Olay", "L'Oreal", "Maybelline", "Loreal"
+    "Neutrogena", "Olay", "L'Oreal", "Maybelline", "Loreal",
+    "Minimalist", "The Ordinary", "Mamaearth", "Himalaya", "Biotique",
+    "Lakme", "Pond's", "Garnier", "Loreal Paris", "Plum",
 ]
 
 # STEP 8: ALLERGEN & WARNING KEYWORDS
@@ -42,6 +44,16 @@ WARNING_KEYWORDS = [
     "warning", "may contain", "contains", "allergen", "not suitable", "caution", "risk",
     "external use", "avoid eyes", "keep away", "do not ingest", "patch test"
 ]
+
+
+def clean_ocr_text(text: str) -> str:
+    """Remove [IMAGE X: filename.jpg] tags injected by OCR pipeline."""
+    # Remove lines like [IMAGE 1: label_scan_1.jpg]
+    cleaned = re.sub(r'\[IMAGE\s*\d+:\s*[^\]]+\]', '', text)
+    # Remove duplicate blank lines left behind
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    return cleaned.strip()
+
 
 # ===== GEMINI EXTRACTION (PRIMARY METHOD) =====
 GEMINI_PROMPT_TEMPLATE = """You are a product label data extractor. Extract fields from this OCR text.
@@ -64,7 +76,132 @@ OUTPUT: {{"product_name":"Dove Beauty Bar","brand":"Dove","expiry_date":"06/2027
 NOW EXTRACT:
 {ocr_text}
 
-Return ONLY valid JSON, no markdown, no explanation:"""
+Return ONLY valid JSON. No markdown. No explanation. No code fences. Just the JSON object:"""
+
+
+def _repair_json(raw: str) -> Dict[str, Any]:
+    """
+    Try multiple strategies to parse potentially truncated/broken JSON.
+    Returns parsed dict or raises json.JSONDecodeError if all strategies fail.
+    """
+
+    # Strategy 1: direct parse
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: find the JSON object boundaries
+    start = raw.find('{')
+    if start == -1:
+        raise json.JSONDecodeError("No JSON object found", raw, 0)
+    raw = raw[start:]
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 3: truncated ingredients array — close it gracefully
+    # Find last complete ingredient string before truncation
+    # Pattern: find the last complete "..." string in ingredients array
+    truncated = raw
+
+    # Remove trailing incomplete string (unclosed quote)
+    # Find last complete quoted string
+    last_complete_quote = -1
+    in_string = False
+    escape_next = False
+    for i, ch in enumerate(truncated):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\':
+            escape_next = True
+            continue
+        if ch == '"':
+            if in_string:
+                in_string = False
+                last_complete_quote = i
+            else:
+                in_string = True
+
+    if in_string and last_complete_quote != -1:
+        # Truncate at the last complete string
+        truncated = truncated[:last_complete_quote + 1]
+
+    # Now close any unclosed structures
+    # Count open brackets and braces
+    depth_brace = 0
+    depth_bracket = 0
+    in_string = False
+    escape_next = False
+    for ch in truncated:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if not in_string:
+            if ch == '{':
+                depth_brace += 1
+            elif ch == '}':
+                depth_brace -= 1
+            elif ch == '[':
+                depth_bracket += 1
+            elif ch == ']':
+                depth_bracket -= 1
+
+    # Add closing characters as needed
+    closing = ''
+    if depth_bracket > 0:
+        closing += ']' * depth_bracket
+    if depth_brace > 0:
+        closing += '}' * depth_brace
+
+    repaired = truncated + closing
+
+    try:
+        return json.loads(repaired)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 4: extract only known fields using regex on raw text
+    # This is a last resort partial extraction
+    result = {}
+
+    pn = re.search(r'"product_name"\s*:\s*"([^"]+)"', raw)
+    if pn:
+        result["product_name"] = pn.group(1)
+
+    br = re.search(r'"brand"\s*:\s*"([^"]+)"', raw)
+    if br:
+        result["brand"] = br.group(1)
+
+    ex = re.search(r'"expiry_date"\s*:\s*"([^"]+)"', raw)
+    if ex:
+        result["expiry_date"] = ex.group(1)
+
+    mg = re.search(r'"mfg_date"\s*:\s*"([^"]+)"', raw)
+    if mg:
+        result["mfg_date"] = mg.group(1)
+
+    # Extract as many complete ingredients as possible
+    ings = re.findall(r'"([A-Za-z][^"]{2,60})"', raw)
+    # Filter out field names and other non-ingredient strings
+    field_names = {"product_name", "brand", "expiry_date", "mfg_date", "ingredients", "warnings"}
+    ings = [i for i in ings if i.lower() not in field_names and not i.startswith("0") and len(i) > 2]
+    if ings:
+        result["ingredients"] = ings[:30]
+
+    if result:
+        return result
+
+    raise json.JSONDecodeError("All repair strategies failed", raw, 0)
 
 
 def extract_with_gemini(ocr_text: str) -> Dict[str, Any]:
@@ -80,16 +217,18 @@ def extract_with_gemini(ocr_text: str) -> Dict[str, Any]:
         print("⚠️ Gemini not available — using regex fallback")
         return empty
 
-    prompt = GEMINI_PROMPT_TEMPLATE.format(ocr_text=ocr_text[:3000])
+    # Clean image tags before sending to Gemini
+    cleaned_text = clean_ocr_text(ocr_text)
+    prompt = GEMINI_PROMPT_TEMPLATE.format(ocr_text=cleaned_text[:3000])
 
     try:
         print("🤖 Sending to Gemini...")
-        print(f"📝 TEXT BEING SENT TO GEMINI (first 1000 chars):\n{ocr_text[:1000]}\n{'='*80}")
+        print(f"📝 TEXT BEING SENT TO GEMINI (first 500 chars):\n{cleaned_text[:500]}\n{'='*80}")
         response = model.generate_content(
             prompt,
             generation_config=genai.GenerationConfig(
-                temperature=0.1,        # LOW temp = consistent, not creative
-                max_output_tokens=4096, # INCREASED from 2048 to prevent cutoff
+                temperature=0.1,
+                max_output_tokens=8192,  # Increased — gemini-2.5-flash uses thinking tokens
             ),
         )
         raw = response.text.strip()
@@ -102,52 +241,29 @@ def extract_with_gemini(ocr_text: str) -> Dict[str, Any]:
         elif "```" in raw:
             raw = raw.split("```")[1].split("```")[0].strip()
 
-        # Find first [ ... ] (array) or { ... } (object) block in case there's any preamble
-        match = re.search(r'[\[\{].*[\]\}]', raw, re.DOTALL)
-        if match:
-            raw = match.group(0)
-
-        # Try to fix incomplete JSON with unterminated strings
-        # Count unclosed quotes - if odd, add closing quote before closing brace
-        try:
-            result = json.loads(raw)
-        except json.JSONDecodeError:
-            # Try to repair: close any unterminated strings
-            if raw.count('"') % 2 == 1:
-                # Odd number of quotes = unterminated string
-                # Find last opening quote and close it
-                last_quote_pos = raw.rfind('"')
-                if last_quote_pos > 0 and last_quote_pos < len(raw) - 1:
-                    # Close the string and any unclosed JSON structures
-                    repaired = raw[:last_quote_pos+1] + '}'
-                    try:
-                        result = json.loads(repaired)
-                    except:
-                        raise  # Re-raise if repair didn't work
-            else:
-                raise  # Re-raise original error
+        result = _repair_json(raw)
 
         # If it's an array with single object, extract just the object
         if isinstance(result, list) and len(result) > 0:
             result = result[0]
-        
+
         result["ingredients"] = result.get("ingredients") or []
         result["warnings"] = result.get("warnings") or []
 
-        # If product_name still null, use heuristic
+        # If product_name still null, use heuristic on cleaned text
         if not result.get("product_name"):
-            result["product_name"] = _heuristic_product_name(ocr_text)
+            result["product_name"] = _heuristic_product_name(cleaned_text)
 
         print(f"✅ product_name={result.get('product_name')}, brand={result.get('brand')}")
-        print(f"📊 FINAL EXTRACTED RESULT:\n{result}\n{'='*80}")
+        print(f"📊 ingredients count={len(result.get('ingredients', []))}")
         return result
 
     except json.JSONDecodeError as e:
-        print(f"❌ JSON parse error: {e} — falling back to regex")
-        return _regex_fallback(ocr_text)
+        print(f"❌ JSON parse error after all repair attempts: {e} — falling back to regex")
+        return _regex_fallback(cleaned_text)
     except Exception as e:
         print(f"❌ Gemini call failed: {e} — falling back to regex")
-        return _regex_fallback(ocr_text)
+        return _regex_fallback(clean_ocr_text(ocr_text))
 
 
 def _heuristic_product_name(text: str) -> str:
@@ -155,6 +271,9 @@ def _heuristic_product_name(text: str) -> str:
     lines = [l.strip() for l in text.split('\n') if l.strip()]
     for line in lines[:20]:
         if len(line) < 3:
+            continue
+        # Skip image tags (should already be removed but just in case)
+        if re.match(r'^\[IMAGE', line, re.IGNORECASE):
             continue
         if re.match(r'^[0-9\W]+$', line):   # skip pure numbers/symbols
             continue
@@ -174,6 +293,9 @@ def _regex_fallback(text: str) -> Dict[str, Any]:
         "ingredients": [], "warnings": [],
     }
 
+    # Clean image tags
+    text = clean_ocr_text(text)
+
     # Brand — check known list first
     text_upper = text.upper()
     for brand in KNOWN_BRANDS:
@@ -183,7 +305,7 @@ def _regex_fallback(text: str) -> Dict[str, Any]:
 
     # Expiry date
     exp = re.search(
-        r'(?:exp(?:iry)?|best\s*before|use\s*by|bb)[:\s]*'
+        r'(?:exp(?:iry)?|best\s*before|use\s*by|bb|expiry\s*date)[:\s]*'
         r'([0-9]{1,2}[/\-][0-9]{1,2}(?:[/\-][0-9]{2,4})?|[A-Za-z]+\s+[0-9]{4})',
         text, re.IGNORECASE
     )
@@ -192,7 +314,7 @@ def _regex_fallback(text: str) -> Dict[str, Any]:
 
     # Mfg date
     mfg = re.search(
-        r'(?:mfg|manufactured|prod(?:uction)?)[:\s]*'
+        r'(?:mfg|manufactured|prod(?:uction)?|mfg\.\s*date)[:\s]*'
         r'([0-9]{1,2}[/\-][0-9]{1,2}(?:[/\-][0-9]{2,4})?|[A-Za-z]+\s+[0-9]{4})',
         text, re.IGNORECASE
     )
@@ -264,7 +386,7 @@ def extract_from_pipeline(front_text, back_text, full_text=None):
     if extracted.get("warnings"):
         score += 0.05
     if len(combined.strip()) < 50:
-        score *= 0.5   # penalise bad scans
+        score *= 0.5
 
     return {
         "product_name": extracted.get("product_name"),

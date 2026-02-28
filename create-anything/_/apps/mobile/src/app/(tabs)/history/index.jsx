@@ -1,25 +1,26 @@
 import { View, Text, useColorScheme, ScrollView } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import { Clock, Package } from "lucide-react-native";
 import HapticButton from "@/components/HapticButton";
 import { useScanStore } from "@/utils/scanStore";
 import { getHistory, getScanDetail } from "@/utils/api";
+import { speak, stopSpeaking } from "@/utils/tts";
 import {
   useFonts,
   Inter_600SemiBold,
   Inter_500Medium,
   Inter_400Regular,
 } from "@expo-google-fonts/inter";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const colorScheme = useColorScheme();
   const isDark = colorScheme === "dark";
-  const { scans, setCurrentScan, setScans } = useScanStore();
+  const { scans, setCurrentScan, setScans, settings } = useScanStore();
   const [remoteScans, setRemoteScans] = useState([]);
   const [loading, setLoading] = useState(false);
 
@@ -29,20 +30,41 @@ export default function HistoryScreen() {
     Inter_400Regular,
   });
 
-  useEffect(() => {
-    const loadRemoteHistory = async () => {
-      setLoading(true);
-      try {
-        const data = await getHistory();
-        setRemoteScans(data);
-      } catch (e) {
-        console.error('Failed to load remote history:', e);
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadRemoteHistory();
-  }, []);
+  const say = useCallback((text, options = {}) => {
+    if (settings.voiceEnabled) speak(text, options);
+  }, [settings.voiceEnabled]);
+
+  const loadRemoteHistory = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await getHistory();
+      setRemoteScans(data);
+      return data;
+    } catch (e) {
+      console.error("Failed to load remote history:", e);
+      say("Could not load history. Please check your connection.");
+      return [];
+    } finally {
+      setLoading(false);
+    }
+  }, [say]);
+
+  // Speak on every screen focus
+  useFocusEffect(
+    useCallback(() => {
+      loadRemoteHistory().then((data) => {
+        if (data.length === 0) {
+          say("History screen. No scans yet. Go to the home screen and scan a label to get started.");
+        } else {
+          say(`History screen. You have ${data.length} past scan${data.length !== 1 ? "s" : ""}. Tap any scan to hear its details.`);
+        }
+      });
+
+      return () => {
+        stopSpeaking();
+      };
+    }, [loadRemoteHistory, say])
+  );
 
   if (!fontsLoaded) {
     return null;
@@ -68,13 +90,18 @@ export default function HistoryScreen() {
   };
 
   const handleScanPress = async (scan) => {
+    const productName = scan.productName || "Unknown Product";
+    const brand = scan.brand ? `by ${scan.brand}` : "";
+    const expiry = scan.expiryDate ? `Expiry date ${scan.expiryDate}.` : "";
+    say(`Loading ${productName} ${brand}. ${expiry}`);
+
     try {
       const fullScan = await getScanDetail(scan.id);
-      // fullScan shape: { id, rawText, extracted, confidence, scannedAt }
       setCurrentScan(fullScan.extracted);
       router.push("/(tabs)/home/result");
     } catch (e) {
-      console.error('Failed to load scan detail:', e);
+      console.error("Failed to load scan detail:", e);
+      say("Could not load this scan. Please try again.");
     }
   };
 
@@ -114,7 +141,13 @@ export default function HistoryScreen() {
         }}
         showsVerticalScrollIndicator={false}
       >
-        {remoteScans.length === 0 && !loading ? (
+        {loading ? (
+          <View style={{ flex: 1, justifyContent: "center", alignItems: "center", paddingVertical: 60 }}>
+            <Text style={{ fontSize: 18, fontFamily: "Inter_400Regular", color: isDark ? "#9CA3AF" : "#6B7280" }}>
+              Loading history...
+            </Text>
+          </View>
+        ) : remoteScans.length === 0 ? (
           /* Empty State */
           <View
             style={{
@@ -202,7 +235,7 @@ export default function HistoryScreen() {
                       marginBottom: 4,
                     }}
                   >
-                    {scan.productName || 'Unknown Product'}
+                    {scan.productName || "Unknown Product"}
                   </Text>
                   <Text
                     style={{
@@ -213,7 +246,9 @@ export default function HistoryScreen() {
                     }}
                   >
                     {scan.brand && `${scan.brand} • `}
-                    {scan.confidence ? `${(scan.confidence * 100).toFixed(0)}% confidence` : 'No data'}
+                    {scan.confidence
+                      ? `${(scan.confidence * 100).toFixed(0)}% confidence`
+                      : "No data"}
                   </Text>
                   <Text
                     style={{

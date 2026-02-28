@@ -70,7 +70,7 @@ export default function HomeScreen() {
             if (settings.voiceEnabled) {
               speak("Auto Scan activated");
             }
-            router.push("/(tabs)/home/auto-scan");
+            router.push("/(tabs)/home/scanning");
           }}
           style={{
             backgroundColor: "#3B82F6",
