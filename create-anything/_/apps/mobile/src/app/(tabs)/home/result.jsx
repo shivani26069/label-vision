@@ -2,7 +2,7 @@ import { View, Text, useColorScheme, ScrollView } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { useRouter } from "expo-router";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   Volume2,
   FileText,
@@ -26,6 +26,7 @@ export default function ResultScreen() {
   const colorScheme = useColorScheme();
   const isDark = colorScheme === "dark";
   const { settings, currentScan, addScan } = useScanStore();
+  const [renderKey, setRenderKey] = useState(0);
 
   const [fontsLoaded] = useFonts({
     Inter_600SemiBold,
@@ -37,10 +38,18 @@ export default function ResultScreen() {
   const isFailed = !currentScan?.product_name || currentScan?.confidence === 0;
 
   useEffect(() => {
+    setRenderKey(prev => prev + 1);
+  }, [currentScan]);
+
+  useEffect(() => {
     if (currentScan) {
       console.log("📍 ResultScreen mounted with currentScan:", JSON.stringify(currentScan, null, 2));
       console.log("📊 Ingredients on result screen:", currentScan.ingredients);
       console.log("📊 Ingredients count:", currentScan.ingredients?.length);
+      console.log("📊 Ingredients exists?:", !!currentScan.ingredients);
+      console.log("📊 Has length >0?:", currentScan.ingredients?.length > 0);
+      console.log("📊 Warnings:", currentScan.warnings);
+      console.log("📊 Warnings count:", currentScan.warnings?.length);
       console.log("📊 Brand:", currentScan.brand);
       console.log("📊 Product name:", currentScan.product_name);
       console.log("📊 Is Failed?:", isFailed);
@@ -85,6 +94,7 @@ export default function ResultScreen() {
 
   return (
     <View
+      key={renderKey}
       style={{
         flex: 1,
         backgroundColor: isDark ? "rgba(0, 0, 0, 0.6)" : "rgba(0, 0, 0, 0.3)",
@@ -243,61 +253,104 @@ export default function ResultScreen() {
                 </View>
               )}
 
-              {/* Warnings */}
+              {/* Warnings - SHOW FIRST & PROMINENT */}
               {currentScan.warnings && currentScan.warnings.length > 0 && (
-                <View style={{ marginBottom: 24 }}>
+                <View style={{ 
+                  marginBottom: 24, 
+                  backgroundColor: "#FFF3E0", 
+                  borderRadius: 12, 
+                  padding: 16, 
+                  borderLeftWidth: 5, 
+                  borderLeftColor: "#FF9800",
+                  minHeight: 200,
+                  overflow: "visible",
+                }}>
                   <Text
                     style={{
-                      fontSize: 16,
-                      fontFamily: "Inter_500Medium",
-                      color: isDark ? "#9CA3AF" : "#6B7280",
-                      marginBottom: 8,
+                      fontSize: 17,
+                      fontFamily: "Inter_600SemiBold",
+                      color: "#333333",
+                      marginBottom: 12,
                     }}
                   >
-                    Warnings
+                    ⚠️ Warnings ({currentScan.warnings.length})
                   </Text>
-                  {currentScan.warnings.map((warning, idx) => (
-                    <Text
-                      key={idx}
-                      style={{
-                        fontSize: 14,
-                        fontFamily: "Inter_400Regular",
-                        color: "#F59E0B",
-                        marginBottom: 4,
-                        paddingLeft: 8,
-                      }}
-                    >
-                      • {warning}
-                    </Text>
-                  ))}
+                  <View style={{ marginLeft: 0 }}>
+                    {currentScan.warnings.map((warning, idx) => (
+                      <View key={idx} style={{ marginBottom: 8 }}>
+                        <Text
+                          style={{
+                            fontSize: 14,
+                            color: "#333333",
+                            lineHeight: 22,
+                          }}
+                        >
+                          • {warning}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
                 </View>
               )}
 
-              {/* Ingredients */}
+              {/* Ingredients - COMPACT PREVIEW */}
               {currentScan.ingredients && currentScan.ingredients.length > 0 && (
-                <View style={{ marginBottom: 24 }}>
+                <View style={{ 
+                  marginBottom: 24, 
+                  backgroundColor: "#E8F5E9", 
+                  borderRadius: 12, 
+                  padding: 16,
+                  borderWidth: 2,
+                  borderColor: "#4CAF50",
+                  minHeight: 200,
+                  overflow: "visible",
+                }}>
                   <Text
                     style={{
-                      fontSize: 16,
-                      fontFamily: "Inter_500Medium",
-                      color: isDark ? "#9CA3AF" : "#6B7280",
-                      marginBottom: 8,
+                      fontSize: 18,
+                      fontFamily: "Inter_600SemiBold",
+                      color: "#333333",
+                      marginBottom: 12,
                     }}
                   >
-                    Ingredients
+                    🧪 Ingredients ({currentScan.ingredients.length})
                   </Text>
                   <Text
                     style={{
                       fontSize: 14,
-                      fontFamily: "Inter_400Regular",
-                      color: isDark ? "#D1D5DB" : "#374151",
-                      lineHeight: 20,
+                      color: "#333333",
+                      lineHeight: 22,
                     }}
                   >
-                    {currentScan.ingredients.join(", ")}
+                    {currentScan.ingredients.slice(0, 5).join(", ")}
+                  </Text>
+                  {currentScan.ingredients.length > 5 && (
+                    <Text
+                      style={{
+                        fontSize: 13,
+                        fontFamily: "Inter_400Regular",
+                        color: "#555555",
+                        marginTop: 8,
+                        fontStyle: "italic",
+                      }}
+                    >
+                      ... +{currentScan.ingredients.length - 5} more
+                    </Text>
+                  )}
+                  <Text
+                    style={{
+                      fontSize: 12,
+                      fontFamily: "Inter_400Regular",
+                      color: "#666666",
+                      marginTop: 10,
+                      fontStyle: "italic",
+                    }}
+                  >
+                    Tap "View Full Label" to see complete list
                   </Text>
                 </View>
               )}
+
             </>
           )}
 

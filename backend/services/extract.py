@@ -56,24 +56,31 @@ def clean_ocr_text(text: str) -> str:
 
 
 # ===== GEMINI EXTRACTION (PRIMARY METHOD) =====
-GEMINI_PROMPT_TEMPLATE = """You are a product label data extractor. Extract fields from this OCR text.
+GEMINI_PROMPT_TEMPLATE = """You are a product label data extractor. Extract ALL fields from this OCR text.
 
 CRITICAL RULES:
 - product_name: ALWAYS return something. If unsure, use the most prominent noun phrase. NEVER null.
 - brand: Return brand/company name if found. null only if truly absent.
 - expiry_date: Look for: exp, expiry, best before, use by, BB, EXP. Return the date string as-is.
 - mfg_date: Look for: mfg, manufactured, prod, MFD. null if absent.
-- ingredients: Split by commas or line breaks. Return array. [] if none found.
-- warnings: Lines with: warning, caution, avoid, not suitable, allergen. Return array. [] if none.
+- ingredients: ALWAYS look for ingredients section. Find all ingredient items. Split by commas, semicolons, or line breaks. Return as array of strings. NEVER skip this. Return [] ONLY if truly absent.
+- warnings: Find lines with: warning, caution, avoid, not suitable, allergen, external use only, do not swallow, keep away. Return array. [] if none.
+
+IMPORTANT: Ingredients might appear as:
+- "Ingredients: Water, Glycerin, Sodium Chloride"
+- "Contains: Milk, Eggs"
+- Listed as bullet points or on separate lines
+- In multiple languages
+- ALL ingredients sections must be extracted completely
 
 EXAMPLES:
 INPUT: TONYMOLY\\nCeramide Mochi Toner\\nEXP: 12/2026\\nIngredients: Water, Glycerin\\nWarning: Avoid eyes
 OUTPUT: {{"product_name":"Ceramide Mochi Toner","brand":"TONYMOLY","expiry_date":"12/2026","mfg_date":null,"ingredients":["Water","Glycerin"],"warnings":["Avoid eyes"]}}
 
-INPUT: Dove Beauty Bar\\nBest Before 06/2027\\nSodium Palmate, Water, Fragrance
-OUTPUT: {{"product_name":"Dove Beauty Bar","brand":"Dove","expiry_date":"06/2027","mfg_date":null,"ingredients":["Sodium Palmate","Water","Fragrance"],"warnings":[]}}
+INPUT: Dove Beauty Bar\\nBest Before 06/2027\\nContains: Sodium Palmate, Water, Fragrance\\nExternal use only
+OUTPUT: {{"product_name":"Dove Beauty Bar","brand":"Dove","expiry_date":"06/2027","mfg_date":null,"ingredients":["Sodium Palmate","Water","Fragrance"],"warnings":["External use only"]}}
 
-NOW EXTRACT:
+Now, CAREFULLY extract ALL data from:
 {ocr_text}
 
 Return ONLY valid JSON. No markdown. No explanation. No code fences. Just the JSON object:"""
@@ -321,17 +328,23 @@ def _regex_fallback(text: str) -> Dict[str, Any]:
     if mfg:
         result["mfg_date"] = mfg.group(1)
 
-    # Ingredients block
-    ing = re.search(
-        r'ingredients?[:\s]*\n?(.+?)(?:\n\s*\n|\n[A-Z][a-z]+:|$)',
+    # Ingredients block - improved regex to handle more formats
+    ing_match = re.search(
+        r'(?:ingredients?|contains?|composition)[:\s]*\n?(.+?)(?:\n\s*\n|(?:\n[A-Z][a-z]+:)|(?:Warning|Caution|Storage|Instructions|Direction|Manufactured|Made|Net|Weight)|$)',
         text, re.IGNORECASE | re.DOTALL
     )
-    if ing:
-        parts = re.split(r'[,;\n]+', ing.group(1))
-        result["ingredients"] = [
-            p.strip().strip('•-*') for p in parts
-            if p.strip() and len(p.strip()) > 2
-        ][:30]
+    
+    if ing_match:
+        ing_text = ing_match.group(1)
+        # Split by common delimiters: commas, semicolons, newlines, bullet points
+        parts = re.split(r'[,;\n•*\-]', ing_text)
+        ingredients = [
+            p.strip().strip('•-*()[]').strip()
+            for p in parts
+            if p.strip() and len(p.strip()) > 1 and not re.match(r'^\d+(\.\d+)?%?$', p.strip())
+        ][:50]
+        if ingredients:
+            result["ingredients"] = ingredients
 
     # Warnings
     for line in text.split('\n'):
@@ -387,6 +400,19 @@ def extract_from_pipeline(front_text, back_text, full_text=None):
         score += 0.05
     if len(combined.strip()) < 50:
         score *= 0.5
+
+    # Debug logs
+    print(f"\n{'='*80}")
+    print(f"✅ FINAL EXTRACT RESULTS:")
+    print(f"  Product: {extracted.get('product_name')}")
+    print(f"  Brand: {extracted.get('brand')}")
+    print(f"  Expiry: {extracted.get('expiry_date')}")
+    print(f"  Mfg Date: {extracted.get('mfg_date')}")
+    print(f"  Ingredients Count: {len(extracted.get('ingredients', []))}")
+    print(f"  Ingredients: {extracted.get('ingredients', [])}")
+    print(f"  Warnings: {extracted.get('warnings', [])}")
+    print(f"  Confidence: {score}")
+    print(f"{'='*80}\n")
 
     return {
         "product_name": extracted.get("product_name"),
