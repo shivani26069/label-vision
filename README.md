@@ -174,6 +174,3 @@ Voice announcements are on by default. The app speaks scan results, navigation c
 
 ---
 
-## License
-
-MIT
